@@ -1,7 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import type { QueryPlanSummary } from "~/types/assessment";
+import type { ApiUploadDetail, QueryPlanSummary, ReconcileEvent } from "~/types/assessment";
 
 export interface RequestLogEntry {
   id: number;
@@ -43,6 +43,57 @@ export class ApiError extends Error {
     message: string,
   ) {
     super(message);
+  }
+}
+
+/**
+ * POST and read a newline-delimited JSON stream of ReconcileEvents.
+ * Calls onEvent for every event; resolves with the final `result` upload.
+ */
+export async function streamApi(
+  path: string,
+  opts: { userId: string; body: unknown; onEvent: (e: ReconcileEvent) => void; signal?: AbortSignal },
+): Promise<ApiUploadDetail> {
+  const started = performance.now();
+  let status: number | "error" = "error";
+  try {
+    const res = await fetch(path, {
+      method: "POST",
+      signal: opts.signal,
+      headers: { "x-user-id": opts.userId, "content-type": "application/json", accept: "application/x-ndjson" },
+      body: JSON.stringify(opts.body),
+    });
+    status = res.status;
+    if (!res.ok || !res.body) {
+      const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+      throw new ApiError(res.status, payload?.error ?? `Request failed (${res.status})`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let result: ApiUploadDetail | null = null;
+    const handle = (line: string) => {
+      if (!line.trim()) return;
+      const e = JSON.parse(line) as ReconcileEvent;
+      opts.onEvent(e);
+      if (e.type === "result") result = e.upload;
+      if (e.type === "error") throw new ApiError(e.status ?? 500, e.error);
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let i: number;
+      while ((i = buffer.indexOf("\n")) >= 0) {
+        handle(buffer.slice(0, i));
+        buffer = buffer.slice(i + 1);
+      }
+    }
+    handle(buffer);
+    if (!result) throw new ApiError(500, "The connection closed before ScopeBot finished.");
+    return result;
+  } finally {
+    record({ method: "POST", url: `${path} (stream)`, status, clientMs: Math.round(performance.now() - started) });
   }
 }
 

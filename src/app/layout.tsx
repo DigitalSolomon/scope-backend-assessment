@@ -1,7 +1,7 @@
 import "~/styles/globals.css";
 
 import { type Metadata } from "next";
-import { Geist } from "next/font/google";
+import { Courier_Prime, Geist } from "next/font/google";
 
 export const metadata: Metadata = {
   title: "Theater Showtimes Manager",
@@ -14,11 +14,18 @@ const geist = Geist({
   variable: "--font-geist-sans",
 });
 
+// ScopeBot's speech uses a typewriter face.
+const typewriter = Courier_Prime({
+  subsets: ["latin"],
+  weight: ["400", "700"],
+  variable: "--font-typewriter",
+});
+
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${geist.variable}`}>
+    <html lang="en" className={`${geist.variable} ${typewriter.variable}`}>
       <body>
         {children}
       </body>

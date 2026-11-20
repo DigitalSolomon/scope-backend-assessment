@@ -96,6 +96,36 @@ export type UploadStatus =
   | "discarded"
   | "failed";
 
+export type ChangeKind =
+  | "add"
+  | "update"
+  | "archive"
+  | "reactivate"
+  | "unchanged"
+  | "duplicate"
+  | "invalid";
+
+/** One proposed reconciliation action, as reviewed in the UI. */
+export interface ApiChange {
+  id: string;
+  kind: ChangeKind;
+  csvRows: number[];
+  showtimeId: string | null;
+  movieTitle: string;
+  auditorium: string;
+  startTime: string;
+  endTime: string;
+  language: string;
+  format: string;
+  rating: string;
+  explanation: string;
+  confidence: number | null;
+  source: "agent" | "rule";
+  decision: "pending" | "accepted" | "rejected";
+  diffs: FieldDiff[];
+  applyError: string | null;
+}
+
 export interface ApiUploadSummary {
   id: string;
   theaterId: string;
@@ -125,12 +155,33 @@ export interface ApiUploadEvent {
 }
 
 export interface ApiUploadDetail extends ApiUploadSummary {
+  /** ScopeBot's line to the reviewer. */
+  botMessage: string | null;
   summary: string | null;
   warnings: string[];
+  model: string | null;
+  /** "agent" when an LLM produced the proposal, "rule" for the fallback. */
+  source: "agent" | "rule";
+  /** The model's thought summaries, when available. */
+  thoughts: string[];
   /** Proposed changes in the same shape the preview modal renders. */
   changes: PreviewChanges;
+  /** Every proposed action, including unchanged / duplicate / invalid rows. */
+  items: ApiChange[];
   events: ApiUploadEvent[];
 }
+
+// ------------------------------------------------ streamed upload progress
+
+export type ReconcileStepKey = "received" | "parsed" | "context" | "model" | "verify" | "saved";
+
+/** Newline-delimited JSON events streamed by POST /api/uploads and /retry. */
+export type ReconcileEvent =
+  | { type: "step"; key: ReconcileStepKey; state: "active" | "done" | "warn"; label: string }
+  | { type: "thought"; text: string }
+  | { type: "ping"; elapsedMs: number }
+  | { type: "result"; upload: ApiUploadDetail }
+  | { type: "error"; error: string; status?: number };
 
 export interface ShowtimeFacets {
   formats: string[];

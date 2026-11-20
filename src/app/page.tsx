@@ -1,8 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { assessmentData } from "~/data/assessment-data";
-import { api, ApiError } from "~/lib/api";
+import { api, ApiError, streamApi } from "~/lib/api";
 import { useDebounce } from "~/lib/hooks/useDebounce";
 import { useMockSession } from "~/lib/mock-session";
 import {
@@ -11,7 +10,8 @@ import {
   type ApiShowtime,
   type ApiTheater,
   type MovieStatus,
-  type PreviewChanges,
+  type ApiUploadDetail,
+  type ReconcileEvent,
   type ShowtimeFacets,
   type ShowtimeSearchResponse,
   type ShowtimeSortField,
@@ -19,12 +19,12 @@ import {
 } from "~/types/assessment";
 import { FileUpload } from "./_components/FileUpload";
 import { FilterBar } from "./_components/FilterBar";
-import { PreviewModal } from "./_components/PreviewModal";
+import { ReconcileModal, type ReconcilePhase } from "./_components/ReconcileModal";
+import { emptyProgress, type ReconcileProgress } from "./_components/ThinkingPanel";
 import { QueryInspector } from "./_components/QueryInspector";
 import { ShowtimesTable } from "./_components/ShowtimesTable";
 import { TheaterPicker } from "./_components/TheaterPicker";
 
-const emptyPreview: PreviewChanges = { adds: [], updates: [], archives: [] };
 const emptyFacets: ShowtimeFacets = {
   formats: [],
   languages: [],
@@ -64,8 +64,14 @@ export default function Home() {
   const [facets, setFacets] = useState<ShowtimeFacets>(emptyFacets);
   const [reloadKey, setReloadKey] = useState(0);
 
-  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
-  const [previewData, setPreviewData] = useState<PreviewChanges>(emptyPreview);
+  const [reconcile, setReconcile] = useState<{
+    open: boolean;
+    phase: ReconcilePhase;
+    fileName: string;
+    upload: ApiUploadDetail | null;
+    error: string | null;
+  }>({ open: false, phase: "thinking", fileName: "", upload: null, error: null });
+  const [progress, setProgress] = useState<ReconcileProgress>(emptyProgress);
 
   const isAdminHere = theater?.role === "admin";
   const hasTheaters = (user?.theaterCount ?? 0) > 0;
@@ -188,12 +194,81 @@ export default function Home() {
     }
   };
 
-  // CSV upload and preview are still mocked; the AI reconciliation flow replaces this next.
-  const handleFileSelect = (_content: string) => {
-    setPreviewData(
-      (theater && assessmentData.previewChangesByTheater[theater.id]) ?? emptyPreview,
-    );
-    setIsPreviewOpen(true);
+  // ------------------------------------------------ CSV upload → ScopeBot review → apply
+  const openReconcile = (patch: Partial<typeof reconcile>) => setReconcile((r) => ({ ...r, ...patch }));
+  const failReconcile = (e: unknown) =>
+    openReconcile({ phase: "error", error: e instanceof Error ? e.message : "Something went wrong." });
+
+  // Streamed progress: every event (including heartbeats) proves the connection is alive.
+  const onProgressEvent = (e: ReconcileEvent) =>
+    setProgress((p) => {
+      const next = { ...p, lastEventAt: Date.now() };
+      if (e.type === "step") next.steps = { ...p.steps, [e.key]: { state: e.state, label: e.label } };
+      else if (e.type === "thought") next.thoughts = [...p.thoughts, e.text];
+      return next;
+    });
+
+  const finishAnalysis = (upload: ApiUploadDetail) =>
+    upload.status === "failed"
+      ? openReconcile({ upload, phase: "error", error: `I couldn't use that file: ${upload.error ?? "unknown error"}` })
+      : openReconcile({ upload, phase: "review", error: null });
+
+  const handleFileSelect = async (content: string, fileName: string) => {
+    if (!theater || !userId) return;
+    setProgress(emptyProgress());
+    setReconcile({ open: true, phase: "thinking", fileName, upload: null, error: null });
+    try {
+      finishAnalysis(
+        await streamApi("/api/uploads", {
+          userId,
+          body: { theaterId: theater.id, fileName, csv: content },
+          onEvent: onProgressEvent,
+        }),
+      );
+    } catch (e) {
+      failReconcile(e);
+    }
+  };
+
+  const handleRetry = async (feedback: string) => {
+    if (!reconcile.upload || !userId) return;
+    setProgress(emptyProgress());
+    openReconcile({ phase: "thinking" });
+    try {
+      finishAnalysis(
+        await streamApi(`/api/uploads/${reconcile.upload.id}/retry`, {
+          userId,
+          body: { feedback },
+          onEvent: onProgressEvent,
+        }),
+      );
+    } catch (e) {
+      failReconcile(e);
+    }
+  };
+
+  const handleConfirm = async (rejectedChangeIds: string[]) => {
+    if (!reconcile.upload || !userId) return;
+    openReconcile({ phase: "applying" });
+    try {
+      const upload = await api<ApiUploadDetail>(`/api/uploads/${reconcile.upload.id}/apply`, {
+        userId,
+        method: "POST",
+        body: { rejectedChangeIds },
+      });
+      openReconcile({ upload, phase: "done" });
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      failReconcile(e);
+    }
+  };
+
+  const handleCancelReconcile = async () => {
+    const id = reconcile.upload?.id;
+    setReconcile((r) => ({ ...r, open: false }));
+    if (id && userId) {
+      await api(`/api/uploads/${id}/discard`, { userId, method: "POST" }).catch(() => undefined);
+    }
   };
 
   const handleClearSchedule = async () => {
@@ -286,7 +361,7 @@ export default function Home() {
             />
           </div>
 
-          <FileUpload onFileSelect={handleFileSelect} disabled={!isAdminHere} />
+          <FileUpload onFileSelect={(c, n) => void handleFileSelect(c, n)} disabled={!isAdminHere} />
 
           <button
             onClick={handleClearSchedule}
@@ -382,12 +457,20 @@ export default function Home() {
 
         <QueryInspector explain={explain} onExplainChange={setExplain} />
 
-        <PreviewModal
-          isOpen={isPreviewOpen}
-          onClose={() => setIsPreviewOpen(false)}
-          onConfirm={() => setIsPreviewOpen(false)}
-          changes={previewData}
-          isApplying={false}
+        <ReconcileModal
+          open={reconcile.open}
+          phase={reconcile.phase}
+          fileName={reconcile.fileName}
+          theaterName={theater?.name ?? ""}
+          upload={reconcile.upload}
+          error={reconcile.error}
+          progress={progress}
+          onCancel={() => void handleCancelReconcile()}
+          onConfirm={(ids) => void handleConfirm(ids)}
+          onRequestFeedback={() => openReconcile({ phase: "feedback" })}
+          onRetry={(feedback) => void handleRetry(feedback)}
+          onCloseFeedback={() => openReconcile({ phase: "review" })}
+          onClose={() => setReconcile((r) => ({ ...r, open: false }))}
         />
       </div>
     </main>

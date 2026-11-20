@@ -3,7 +3,7 @@
 import { useRef } from "react";
 
 interface FileUploadProps {
-  onFileSelect: (content: string) => void;
+  onFileSelect: (content: string, fileName: string) => void;
   disabled?: boolean;
 }
 
@@ -17,7 +17,7 @@ export function FileUpload({ onFileSelect, disabled }: FileUploadProps) {
     if (!file) return;
 
     const content = await file.text();
-    onFileSelect(content);
+    onFileSelect(content, file.name);
 
     // Reset input so the same file can be selected again
     if (fileInputRef.current) {

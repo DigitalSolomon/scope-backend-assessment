@@ -8,6 +8,12 @@ export const env = createEnv({
    */
   server: {
     DATABASE_URL: z.string().url(),
+    // Optional: without it, CSV reconciliation falls back to rule-based matching.
+    GEMINI_API_KEY: z.string().min(1).optional(),
+    GEMINI_MODEL: z.string().default("gemini-3.8-flash"),
+    // "low" often skips reasoning entirely (0 thought tokens, no summary);
+    // "medium" reasons about stale rows and renames and returns a summary.
+    GEMINI_THINKING_LEVEL: z.enum(["minimal", "low", "medium", "high"]).default("medium"),
     NODE_ENV: z
       .enum(["development", "test", "production"])
       .default("development"),
@@ -26,6 +32,9 @@ export const env = createEnv({
    */
   runtimeEnv: {
     DATABASE_URL: process.env.DATABASE_URL,
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    GEMINI_MODEL: process.env.GEMINI_MODEL,
+    GEMINI_THINKING_LEVEL: process.env.GEMINI_THINKING_LEVEL,
     NODE_ENV: process.env.NODE_ENV,
   },
   /**
