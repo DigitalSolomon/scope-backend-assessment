@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { errorResponse, getUserId, HttpError } from "~/server/access";
 import { MAX_CSV_BYTES } from "~/server/reconcile/csv";
+import { THINKING_LEVELS } from "~/server/reconcile/gemini";
 import { assertCanUpload, createUpload } from "~/server/reconcile/service";
 import { ndjson, wantsStream } from "~/server/stream";
 import { listUploads } from "~/server/uploads";
@@ -26,6 +27,8 @@ const body = z.object({
   theaterId: z.string().min(1),
   fileName: z.string().min(1).max(200),
   csv: z.string().min(1).max(MAX_CSV_BYTES),
+  // Optional: how hard ScopeBot thinks about this upload (the UI's Quick / Thorough toggle).
+  thinkingLevel: z.enum(THINKING_LEVELS).optional(),
 });
 
 /**
@@ -39,13 +42,15 @@ export async function POST(request: Request) {
     const userId = getUserId(request);
     if (!userId) throw new HttpError(400, "x-user-id header is required");
     const parsed = body.safeParse(await request.json().catch(() => null));
-    if (!parsed.success) throw new HttpError(400, "Expected { theaterId, fileName, csv } (CSV up to 1 MB)");
-    const { theaterId, fileName, csv } = parsed.data;
+    if (!parsed.success) {
+      throw new HttpError(400, "Expected { theaterId, fileName, csv, thinkingLevel? } (CSV up to 1 MB; thinkingLevel is minimal, low, medium or high)");
+    }
+    const { theaterId, fileName, csv, thinkingLevel } = parsed.data;
     if (wantsStream(request)) {
       await assertCanUpload(userId, theaterId); // fail fast with a normal 403 before streaming
-      return ndjson((send) => createUpload(userId, theaterId, fileName, csv, send));
+      return ndjson((send) => createUpload(userId, theaterId, fileName, csv, send, { thinkingLevel }));
     }
-    return Response.json(await createUpload(userId, theaterId, fileName, csv));
+    return Response.json(await createUpload(userId, theaterId, fileName, csv, undefined, { thinkingLevel }));
   } catch (error) {
     return errorResponse(error);
   }

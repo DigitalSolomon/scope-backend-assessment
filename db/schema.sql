@@ -82,6 +82,9 @@ create unique index if not exists movies_title_key_unique
   on hv_theater.movies (title_key);
 create index if not exists movies_title_trgm
   on hv_theater.movies using gin (title {{trgm}}.gin_trgm_ops);
+-- Punctuation-insensitive title search ("spiderman" finds "Spider-Man").
+create index if not exists movies_title_squashed_trgm
+  on hv_theater.movies using gin ((replace(title_key, ' ', '')) {{trgm}}.gin_trgm_ops);
 create index if not exists movies_status
   on hv_theater.movies (status);
 -- Sorting showtimes by movie title / status walks movies in order.

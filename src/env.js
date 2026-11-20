@@ -11,8 +11,12 @@ export const env = createEnv({
     // Optional: without it, CSV reconciliation falls back to rule-based matching.
     GEMINI_API_KEY: z.string().min(1).optional(),
     GEMINI_MODEL: z.string().default("gemini-3.8-flash"),
+    // Tried last, when the main model is rate limited or keeps timing out.
+    GEMINI_FALLBACK_MODEL: z.string().default("gemini-3.5-flash-lite"),
     // "low" often skips reasoning entirely (0 thought tokens, no summary);
     // "medium" reasons about stale rows and renames and returns a summary.
+    // Time limits scale with this level; see DEFAULT_TIMING in gemini.ts.
+    // The default; a reviewer can pick Quick (low) or Thorough (medium) per upload in the UI.
     GEMINI_THINKING_LEVEL: z.enum(["minimal", "low", "medium", "high"]).default("medium"),
     NODE_ENV: z
       .enum(["development", "test", "production"])
@@ -34,6 +38,7 @@ export const env = createEnv({
     DATABASE_URL: process.env.DATABASE_URL,
     GEMINI_API_KEY: process.env.GEMINI_API_KEY,
     GEMINI_MODEL: process.env.GEMINI_MODEL,
+    GEMINI_FALLBACK_MODEL: process.env.GEMINI_FALLBACK_MODEL,
     GEMINI_THINKING_LEVEL: process.env.GEMINI_THINKING_LEVEL,
     NODE_ENV: process.env.NODE_ENV,
   },

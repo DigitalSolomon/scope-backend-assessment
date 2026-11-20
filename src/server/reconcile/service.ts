@@ -8,6 +8,7 @@ import { getRole, HttpError } from "../access";
 import { sql } from "../db";
 import { getUpload } from "../uploads";
 import { runAgent } from "./agent";
+import type { ThinkingLevel } from "./gemini";
 import { CancelledError, watchCancel } from "./cancel";
 import { loadContext } from "./context";
 import { CsvError, parseShowtimeCsv } from "./csv";
@@ -16,6 +17,11 @@ import type { ChangeDraft } from "./plan";
 type Tx = postgres.TransactionSql;
 /** Receives live progress for streaming to the browser. */
 export type Progress = (e: ReconcileEvent) => void;
+/** Per-upload choices made by the reviewer. */
+export interface AnalyzeOptions {
+  /** Quick ("low") or Thorough ("medium"); omitted means the server default. */
+  thinkingLevel?: ThinkingLevel;
+}
 
 async function requireAdmin(userId: string, theaterId: string) {
   if ((await getRole(userId, theaterId)) !== "admin") {
@@ -101,11 +107,12 @@ async function analyze(
   actorId: string,
   feedback?: string,
   progress: Progress = () => undefined,
+  options: AnalyzeOptions = {},
 ) {
   await setStatus(uploadId, "analyzing", feedback ? "Re-analyzing with reviewer feedback" : "Parsing and matching rows");
   const watch = watchCancel(uploadId);
   try {
-    await analyzeRows(uploadId, theaterId, csv, actorId, feedback, progress, watch);
+    await analyzeRows(uploadId, theaterId, csv, actorId, feedback, progress, watch, options);
   } finally {
     watch.stop();
   }
@@ -119,6 +126,7 @@ async function analyzeRows(
   feedback: string | undefined,
   progress: Progress,
   watch: ReturnType<typeof watchCancel>,
+  options: AnalyzeOptions,
 ) {
   progress({ type: "step", key: "parsed", state: "active", label: "Reading the file…" });
   let parsed;
@@ -165,6 +173,7 @@ async function analyzeRows(
       feedback ? { text: feedback, previous } : undefined,
       progress,
       watch.signal,
+      options,
     );
     watch.check();
     if (parsed.ignoredColumns.length) outcome.warnings.push(`Ignored extra columns: ${parsed.ignoredColumns.join(", ")}.`);
@@ -180,6 +189,8 @@ async function analyzeRows(
         source: outcome.source,
         thoughts: outcome.thoughts,
         agentError: outcome.error,
+        archivesPreselected: outcome.archivesPreselected,
+        thinkingLevel: outcome.thinkingLevel,
       },
     });
     if (outcome.error) await event(uploadId, "error", { message: `AI unavailable, used rules: ${outcome.error}` });
@@ -212,18 +223,23 @@ export async function createUpload(
   fileName: string,
   csv: string,
   progress: Progress = () => undefined,
+  options: AnalyzeOptions = {},
 ) {
   await requireAdmin(userId, theaterId);
   const sha = createHash("sha256").update(csv).digest("hex");
+  // Postgres text cannot hold NUL bytes. A binary file (image, spreadsheet) is
+  // still recorded as a failed attempt, without its unusable contents.
+  const binary = csv.includes("\u0000");
+  fileName = fileName.replace(/\u0000/g, "").slice(0, 200) || "upload.csv";
   const [u] = await sql<{ id: string }[]>`
     insert into hv_theater.csv_uploads (theater_id, uploaded_by, file_name, file_size, file_sha256, raw_csv)
-    values (${theaterId}, ${userId}, ${fileName.slice(0, 200)}, ${Buffer.byteLength(csv)}, ${sha}, ${csv})
+    values (${theaterId}, ${userId}, ${fileName}, ${Buffer.byteLength(csv)}, ${sha}, ${binary ? null : csv})
     returning id`;
   await event(u!.id, "status", { status: "received", message: `Received ${fileName}`, actorId: userId });
   progress({ type: "started", uploadId: u!.id });
   const kb = Math.max(1, Math.round(Buffer.byteLength(csv) / 1024));
   progress({ type: "step", key: "received", state: "done", label: `Got ${fileName} (${kb} KB)` });
-  await analyze(u!.id, theaterId, csv, userId, undefined, progress);
+  await analyze(u!.id, theaterId, csv, userId, undefined, progress, options);
   return getUpload(userId, u!.id);
 }
 
@@ -242,6 +258,7 @@ export async function retryUpload(
   uploadId: string,
   feedback: string,
   progress: Progress = () => undefined,
+  options: AnalyzeOptions = {},
 ) {
   const u = await loadForAction(userId, uploadId);
   if (u.status !== "pending_review") throw new HttpError(409, `Upload is ${u.status}, not awaiting review`);
@@ -249,7 +266,7 @@ export async function retryUpload(
   await event(uploadId, "feedback", { message: feedback, actorId: userId });
   progress({ type: "started", uploadId });
   progress({ type: "step", key: "received", state: "done", label: "Got your feedback" });
-  await analyze(uploadId, u.theater_id, u.raw_csv, userId, feedback, progress);
+  await analyze(uploadId, u.theater_id, u.raw_csv, userId, feedback, progress, options);
   return getUpload(userId, uploadId);
 }
 
@@ -312,20 +329,26 @@ async function ensureAuditorium(tx: Tx, theaterId: string, name: string) {
 }
 
 type ChangeRow = {
-  id: string; kind: string; showtime_id: string | null; showtime_version: number | null;
+  id: string; kind: string; csv_rows: number[]; showtime_id: string | null; showtime_version: number | null;
   movie_title: string; auditorium: string; start_time: Date | null; end_time: Date | null;
   language: string; format: string; rating: string; diff_fields: string[] | null;
 };
 
-async function applyChange(tx: Tx, theaterId: string, c: ChangeRow) {
+/**
+ * `sourceUpdated` is the CSV row's own last_updated. A showtime written from a
+ * file is stamped with the file's timestamp, not "now", so the next, newer
+ * file from the partner is still newer than what is stored. Without it (the
+ * file has no last_updated, or the change is an archive) the stamp is now().
+ */
+async function applyChange(tx: Tx, theaterId: string, c: ChangeRow, sourceUpdated: string | null) {
   if (c.kind === "add") {
     const movieId = await ensureMovie(tx, c.movie_title, c.rating);
     const audId = await ensureAuditorium(tx, theaterId, c.auditorium);
     await tx`
       insert into hv_theater.showtimes
-        (theater_id, movie_id, auditorium_id, start_time, end_time, language, format, status)
+        (theater_id, movie_id, auditorium_id, start_time, end_time, language, format, status, last_updated)
       values (${theaterId}, ${movieId}, ${audId}, ${c.start_time}, ${c.end_time},
-              ${c.language || "EN"}, ${c.format || "2D"}, 'active')`;
+              ${c.language || "EN"}, ${c.format || "2D"}, 'active', coalesce(${sourceUpdated}::timestamptz, now()))`;
     return;
   }
   const [s] = await tx<{ version: number; movie_id: string }[]>`
@@ -351,11 +374,12 @@ async function applyChange(tx: Tx, theaterId: string, c: ChangeRow) {
       start_time = ${c.start_time}, end_time = ${c.end_time},
       language = coalesce(nullif(${c.language}, ''), language),
       format = coalesce(nullif(${c.format}, ''), format),
-      status = 'active', last_updated = now(), version = version + 1
+      status = 'active',
+      last_updated = greatest(last_updated, coalesce(${sourceUpdated}::timestamptz, now())),
+      version = version + 1
     where id = ${c.showtime_id}`;
-  if (fields.has("rating") && c.rating) {
-    await tx`update hv_theater.movies set rating = ${c.rating}, updated_at = now() where id = ${movieId}`;
-  }
+  // Ratings are not written: a film is shared by every theater, so one
+  // theater's upload must not change it for the others.
 }
 
 const describeError = (e: unknown) =>
@@ -374,6 +398,14 @@ export async function applyUpload(userId: string, uploadId: string, rejectedIds:
   const u = await loadForAction(userId, uploadId);
   if (u.status !== "pending_review") throw new HttpError(409, `Upload is ${u.status}, not awaiting review`);
 
+  // Each CSV row's own last_updated, to stamp the showtimes it changes.
+  const rowUpdated = new Map<number, string>();
+  try {
+    for (const r of u.raw_csv ? parseShowtimeCsv(u.raw_csv).rows : []) if (r.lastUpdated) rowUpdated.set(r.row, r.lastUpdated);
+  } catch {
+    // An unreadable file has no proposal to apply; nothing to stamp.
+  }
+
   const result = await sql.begin(async (tx) => {
     const [locked] = await tx<{ status: string }[]>`
       update hv_theater.csv_uploads set status = 'applying', reviewed_at = now(), updated_at = now()
@@ -387,7 +419,7 @@ export async function applyUpload(userId: string, uploadId: string, rejectedIds:
       where upload_id = ${uploadId} and kind in ('add', 'update', 'reactivate', 'archive')`;
 
     const changes = await tx<ChangeRow[]>`
-      select c.id, c.kind, c.showtime_id, c.showtime_version, c.movie_title, c.auditorium,
+      select c.id, c.kind, c.csv_rows, c.showtime_id, c.showtime_version, c.movie_title, c.auditorium,
              c.start_time, c.end_time, c.language, c.format, c.rating,
              (select array_agg(field) from hv_theater.upload_change_diffs d where d.change_id = c.id) as diff_fields
       from hv_theater.upload_changes c
@@ -398,7 +430,7 @@ export async function applyUpload(userId: string, uploadId: string, rejectedIds:
     let failed = 0;
     for (const c of changes) {
       try {
-        await tx.savepoint(async (sp) => applyChange(sp, u.theater_id, c));
+        await tx.savepoint(async (sp) => applyChange(sp, u.theater_id, c, rowUpdated.get(c.csv_rows[0] ?? -1) ?? null));
         await tx`update hv_theater.upload_changes set applied_at = now(), apply_error = null where id = ${c.id}`;
         applied++;
       } catch (e) {
@@ -406,7 +438,8 @@ export async function applyUpload(userId: string, uploadId: string, rejectedIds:
         await tx`update hv_theater.upload_changes set apply_error = ${describeError(e)} where id = ${c.id}`;
       }
     }
-    const status = failed === 0 ? "applied" : applied === 0 ? "failed" : "partially_applied";
+    // Confirming with every change unticked applies nothing: that is a discard.
+    const status = changes.length === 0 ? "discarded" : failed === 0 ? "applied" : applied === 0 ? "failed" : "partially_applied";
     await tx`
       update hv_theater.csv_uploads set
         status = ${status}::hv_theater.upload_status, applied_count = ${applied}, failed_count = ${failed},
@@ -418,7 +451,10 @@ export async function applyUpload(userId: string, uploadId: string, rejectedIds:
 
   await event(uploadId, "status", {
     status: result.status,
-    message: `Applied ${result.applied} change(s)${result.failed ? `, ${result.failed} failed` : ""}`,
+    message:
+      result.status === "discarded"
+        ? "Reviewer confirmed with nothing selected; no changes applied"
+        : `Applied ${result.applied} change(s)${result.failed ? `, ${result.failed} failed` : ""}`,
     actorId: userId,
   });
   return getUpload(userId, uploadId);

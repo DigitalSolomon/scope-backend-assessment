@@ -11,13 +11,14 @@ import { CancelledError } from "./cancel";
 
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions";
 const API_REVISION = "2026-05-20";
-const FALLBACK_MODEL = "gemini-3.5-flash-lite";
 
 export class GeminiError extends Error {
   constructor(
     message: string,
     public status: number | null,
     public retryable: boolean,
+    /** "timeout": hit the attempt's time limit. "stalled": the stream went silent. */
+    public kind: "timeout" | "stalled" | "error" = "error",
   ) {
     super(message);
   }
@@ -25,6 +26,8 @@ export class GeminiError extends Error {
 
 export interface GeminiResult {
   model: string;
+  /** The level this answer was produced at (lower than configured if the first attempt was slow). */
+  thinkingLevel: ThinkingLevel;
   json: unknown;
   thoughts: string[];
   latencyMs: number;
@@ -84,13 +87,53 @@ function parseJsonLoose(text: string): unknown {
   }
 }
 
-async function callOnce(
-  model: string,
+interface CallLimits {
+  timeoutMs: number;
+  idleMs: number;
+  signal?: AbortSignal;
+  onThought?: (text: string) => void;
+}
+
+/** One attempt, bounded by a total time limit and a stall (idle) limit. */
+async function callOnce(step: AttemptStep, input: string, schema: object, limits: CallLimits): Promise<GeminiResult> {
+  const abort = new AbortController();
+  let why: "timeout" | "stalled" | null = null;
+  const stop = (kind: "timeout" | "stalled") => {
+    why ??= kind;
+    abort.abort();
+  };
+  const total = setTimeout(() => stop("timeout"), limits.timeoutMs);
+  let idle = setTimeout(() => stop("stalled"), limits.idleMs);
+  const alive = () => {
+    clearTimeout(idle);
+    idle = setTimeout(() => stop("stalled"), limits.idleMs);
+  };
+  const onCancel = () => abort.abort();
+  limits.signal?.addEventListener("abort", onCancel, { once: true });
+  if (limits.signal?.aborted) abort.abort();
+  try {
+    return await stream(step, input, schema, abort.signal, alive, limits.onThought);
+  } catch (e) {
+    if (limits.signal?.aborted) throw new CancelledError();
+    if (why === "timeout") throw new GeminiError("Timed out waiting for the model", null, true, "timeout");
+    if (why === "stalled") throw new GeminiError("The model stopped responding", null, true, "stalled");
+    throw e;
+  } finally {
+    clearTimeout(total);
+    clearTimeout(idle);
+    limits.signal?.removeEventListener("abort", onCancel);
+  }
+}
+
+async function stream(
+  step: AttemptStep,
   input: string,
   schema: object,
   signal: AbortSignal,
+  alive: () => void,
   onThought?: (text: string) => void,
 ): Promise<GeminiResult> {
+  const { model, thinkingLevel } = step;
   const started = Date.now();
   const res = await fetch(ENDPOINT, {
     method: "POST",
@@ -107,7 +150,7 @@ async function callOnce(
       stream: true,
       response_format: { type: "text", mime_type: "application/json", schema },
       generation_config: {
-        thinking_level: env.GEMINI_THINKING_LEVEL,
+        thinking_level: thinkingLevel,
         thinking_summaries: "auto",
         temperature: 0.2,
       },
@@ -126,8 +169,9 @@ async function callOnce(
     const { output, thoughts } = extract(await res.json());
     if (!output) throw new GeminiError("Model returned no output", res.status, true);
     thoughts.forEach((t) => onThought?.(t));
-    return { model, json: parseJsonLoose(output), thoughts, latencyMs: Date.now() - started };
+    return { model, thinkingLevel, json: parseJsonLoose(output), thoughts, latencyMs: Date.now() - started };
   }
+  alive();
 
   // Server-sent events: step.start declares a step's type by index; step.delta
   // carries thought-summary text (thought steps) or answer text (model_output).
@@ -178,7 +222,8 @@ async function callOnce(
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+    alive();
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
     let i: number;
     while ((i = buffer.indexOf("\n\n")) >= 0) {
       handle(buffer.slice(0, i));
@@ -189,42 +234,131 @@ async function callOnce(
   if (!output) {
     throw new GeminiError(status === "incomplete" ? "Model ran out of output tokens" : "Model returned no output", null, true);
   }
-  return { model, json: parseJsonLoose(output), thoughts: thoughts.map((t) => t.trim()).filter(Boolean), latencyMs: Date.now() - started };
+  return { model, thinkingLevel, json: parseJsonLoose(output), thoughts: thoughts.map((t) => t.trim()).filter(Boolean), latencyMs: Date.now() - started };
+}
+
+// ------------------------------------------------------------------ attempts
+//
+// How long a call takes depends mostly on the thinking level (and a little on
+// the file size), so the time limits do too. A slow or stalled call is retried
+// once at a lighter thinking level before the lighter model is tried, and the
+// whole thing fits inside one budget so the serverless function never dies
+// mid-analysis. If every attempt fails the caller falls back to rules.
+
+export const THINKING_LEVELS = ["minimal", "low", "medium", "high"] as const;
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+export interface Timing {
+  /** Wall-clock budget for all attempts together (the route allows 120 s). */
+  budgetMs: number;
+  /** No bytes from the model for this long means the stream has stalled. */
+  idleMs: number;
+  /** Time kept back so a slow first attempt still leaves room for a fast retry. */
+  retryReserveMs: number;
+  /** Not worth starting an attempt with less than this left. */
+  minAttemptMs: number;
+  /** Per thinking level: time allowed for an attempt, plus an allowance per CSV row. */
+  baseMs: Record<ThinkingLevel, number>;
+  perRowMs: Record<ThinkingLevel, number>;
+}
+
+export const DEFAULT_TIMING: Timing = {
+  budgetMs: 100_000,
+  idleMs: 30_000,
+  retryReserveMs: 25_000,
+  minAttemptMs: 8_000,
+  baseMs: { minimal: 25_000, low: 35_000, medium: 65_000, high: 75_000 },
+  perRowMs: { minimal: 150, low: 150, medium: 250, high: 300 },
+};
+
+export interface AttemptStep {
+  model: string;
+  thinkingLevel: ThinkingLevel;
+}
+
+/** The lighter level a slow call is retried at. */
+export const fasterLevel = (level: ThinkingLevel): ThinkingLevel => (level === "high" || level === "medium" ? "low" : level);
+
+/**
+ * Attempts in order: the configured model and thinking level, the same model
+ * thinking less, then the lighter model. Steps that repeat are dropped, so a
+ * "low" configuration has two steps and a "medium" one has three.
+ */
+export function attemptLadder(model: string, fallbackModel: string, level: ThinkingLevel): AttemptStep[] {
+  const steps: AttemptStep[] = [
+    { model, thinkingLevel: level },
+    { model, thinkingLevel: fasterLevel(level) },
+    { model: fallbackModel, thinkingLevel: fasterLevel(level) },
+  ];
+  return steps.filter((s, i) => steps.findIndex((o) => o.model === s.model && o.thinkingLevel === s.thinkingLevel) === i);
+}
+
+/** Time limit for one attempt, given what is left of the budget. */
+export function attemptTimeout(step: AttemptStep, rows: number, remainingMs: number, isLast: boolean, timing: Timing): number {
+  const wanted = timing.baseMs[step.thinkingLevel] + rows * timing.perRowMs[step.thinkingLevel];
+  const afterReserve = remainingMs - (isLast ? 0 : timing.retryReserveMs);
+  // If keeping a reserve would leave too little, spend what is left on this attempt.
+  return Math.max(0, Math.min(wanted, afterReserve >= timing.minAttemptMs ? afterReserve : remainingMs));
+}
+
+export interface AttemptInfo extends AttemptStep {
+  attempt: number;
+  /** Why the previous attempt was abandoned (absent on the first). */
+  reason?: string;
 }
 
 export interface GenerateOptions {
-  timeoutMs?: number;
   /** Called with each thought-summary chunk as it streams in. */
   onThought?: (text: string) => void;
-  /** Called when a model attempt starts (including retries and fallbacks). */
-  onAttempt?: (info: { model: string; attempt: number; reason?: string }) => void;
+  /** Called when an attempt starts (including retries and fallbacks). */
+  onAttempt?: (info: AttemptInfo) => void;
   /** Aborts the in-flight request (reviewer cancelled); throws CancelledError. */
   signal?: AbortSignal;
+  /** CSV rows in the request; larger files are allowed more time. */
+  rows?: number;
+  /** Start from this thinking level instead of the configured one. */
+  thinkingLevel?: ThinkingLevel;
+  /** Override time limits (tests, or a caller with part of the budget already spent). */
+  timing?: Partial<Timing>;
 }
 
-/** Generate JSON for `schema`, streaming thoughts. Retries once, then falls back to a lighter model on rate limits. */
+const describeFailure = (e: unknown) =>
+  e instanceof GeminiError
+    ? e.status === 429 ? "rate limited" : e.kind === "timeout" ? "took too long" : e.kind === "stalled" ? "stalled" : e.message
+    : e instanceof Error ? e.message : "error";
+
+/**
+ * Generate JSON for `schema`, streaming thoughts. Walks the attempt ladder
+ * until one attempt returns valid JSON or the budget runs out.
+ */
 export async function generateJson(input: string, schema: object, opts: GenerateOptions = {}): Promise<GeminiResult> {
   if (!env.GEMINI_API_KEY) throw new GeminiError("GEMINI_API_KEY is not set", null, false);
-  const timeout = AbortSignal.timeout(opts.timeoutMs ?? 100_000);
-  const signal = opts.signal ? AbortSignal.any([timeout, opts.signal]) : timeout;
-  const models = [...new Set([env.GEMINI_MODEL, FALLBACK_MODEL])];
+  const timing: Timing = { ...DEFAULT_TIMING, ...opts.timing };
+  const deadline = Date.now() + timing.budgetMs;
+  const steps = attemptLadder(env.GEMINI_MODEL, env.GEMINI_FALLBACK_MODEL, opts.thinkingLevel ?? env.GEMINI_THINKING_LEVEL);
   let last: unknown;
   let reason: string | undefined;
-  for (const model of models) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        opts.onAttempt?.({ model, attempt, reason });
-        return await callOnce(model, input, schema, signal, opts.onThought);
-      } catch (e) {
-        last = e;
-        if (opts.signal?.aborted) throw new CancelledError();
-        if (signal.aborted) throw new GeminiError("Timed out waiting for the model", null, false);
-        reason = e instanceof GeminiError && e.status === 429 ? "rate limited" : e instanceof Error ? e.message : "error";
-        const retryable = e instanceof GeminiError ? e.retryable : true;
-        if (!retryable) break; // try the next model (e.g. unknown model id) or give up
-        if (e instanceof GeminiError && e.status === 429) break; // rate limited: switch model now
-        await new Promise((r) => setTimeout(r, 800));
-        if (opts.signal?.aborted) throw new CancelledError();
+
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i]!;
+    const remaining = deadline - Date.now();
+    if (remaining < timing.minAttemptMs && i > 0) break;
+    const timeoutMs = attemptTimeout(step, opts.rows ?? 0, remaining, i === steps.length - 1, timing);
+    try {
+      opts.onAttempt?.({ ...step, attempt: i, reason });
+      return await callOnce(step, input, schema, { timeoutMs, idleMs: timing.idleMs, signal: opts.signal, onThought: opts.onThought });
+    } catch (e) {
+      if (e instanceof CancelledError || opts.signal?.aborted) throw new CancelledError();
+      last = e;
+      reason = describeFailure(e);
+      const status = e instanceof GeminiError ? e.status : null;
+      // A bad or unauthorised key fails the same way on every attempt.
+      if (status === 401 || status === 403) break;
+      // Rate limits and unknown-model errors belong to this model: skip to the next one.
+      if (status === 429 || (status !== null && status >= 400 && status < 500)) {
+        const next = steps.findIndex((s, j) => j > i && s.model !== step.model);
+        if (next === -1) break;
+        i = next - 1;
       }
     }
   }

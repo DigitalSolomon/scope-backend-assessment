@@ -22,6 +22,8 @@ import { FilterBar } from "./_components/FilterBar";
 import { ReconcileModal, type ReconcilePhase } from "./_components/ReconcileModal";
 import { emptyProgress, type ReconcileProgress } from "./_components/ThinkingPanel";
 import { QueryInspector } from "./_components/QueryInspector";
+import { UploadHistory } from "./_components/UploadHistory";
+import { ThinkingToggle, type ThinkingMode } from "./_components/ThinkingToggle";
 import { ShowtimesTable } from "./_components/ShowtimesTable";
 import { TheaterPicker } from "./_components/TheaterPicker";
 
@@ -72,6 +74,20 @@ export default function Home() {
     error: string | null;
   }>({ open: false, phase: "thinking", fileName: "", upload: null, error: null });
   const [progress, setProgress] = useState<ReconcileProgress>(emptyProgress);
+  // ScopeBot's thinking mode. Starts at the server's default; the reviewer can switch per upload.
+  const [scopebot, setScopebot] = useState<{ aiConnected: boolean; thinkingLevel: string } | null>(null);
+  const [chosenMode, setChosenMode] = useState<ThinkingMode | null>(null);
+  useEffect(() => {
+    api<{ scopebot?: { aiConnected: boolean; thinkingLevel: string } }>("/api/health")
+      .then((d) => setScopebot(d.scopebot ?? null))
+      .catch(() => undefined);
+  }, []);
+  const defaultMode: ThinkingMode = scopebot?.thinkingLevel === "low" || scopebot?.thinkingLevel === "minimal" ? "quick" : "thorough";
+  const mode = chosenMode ?? defaultMode;
+  // Only sent when it differs from the server default, so a deployer's GEMINI_THINKING_LEVEL still applies.
+  const thinkingLevel = mode === defaultMode ? undefined : mode === "quick" ? "low" : "medium";
+  const [historyKey, setHistoryKey] = useState(0);
+  const refreshHistory = () => setHistoryKey((k) => k + 1);
   // The analysis in flight: its stream, its upload id (from the `started` event), and whether Cancel was pressed.
   const analysisRef = useRef<{ abort: AbortController; uploadId: string | null; cancelled: boolean; retryOf: ApiUploadDetail | null } | null>(null);
 
@@ -198,8 +214,10 @@ export default function Home() {
 
   // ------------------------------------------------ CSV upload → ScopeBot review → apply
   const openReconcile = (patch: Partial<typeof reconcile>) => setReconcile((r) => ({ ...r, ...patch }));
-  const failReconcile = (e: unknown) =>
+  const failReconcile = (e: unknown) => {
     openReconcile({ phase: "error", error: e instanceof Error ? e.message : "Something went wrong." });
+    refreshHistory();
+  };
 
   /** Tell the server to stop, then drop the stream. Before `started` arrives there is no id yet; the event handler finishes the job. */
   const sendCancel = (run: NonNullable<typeof analysisRef.current>) => {
@@ -215,7 +233,8 @@ export default function Home() {
           await api(`/api/uploads/${upload.id}/discard`, { userId, method: "POST" });
         }
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(refreshHistory);
   };
 
   const handleStopAnalysis = () => {
@@ -250,10 +269,31 @@ export default function Home() {
     });
   };
 
-  const finishAnalysis = (upload: ApiUploadDetail) =>
-    upload.status === "failed"
-      ? openReconcile({ upload, phase: "error", error: `I couldn't use that file: ${upload.error ?? "unknown error"}` })
-      : openReconcile({ upload, phase: "review", error: null });
+  const finishAnalysis = (upload: ApiUploadDetail) => {
+    refreshHistory();
+    if (upload.status === "failed") {
+      openReconcile({ upload, phase: "error", error: `I couldn't use that file: ${upload.error ?? "unknown error"}` });
+    } else openReconcile({ upload, phase: "review", error: null });
+  };
+
+  /** From the upload history: resume a proposal that is awaiting review, or look at a past upload. */
+  const openUpload = async (summary: { id: string }) => {
+    if (!userId) return;
+    try {
+      const upload = await api<ApiUploadDetail>(`/api/uploads/${summary.id}`, { userId });
+      const resume = upload.status === "pending_review" && isAdminHere;
+      setReconcile({ open: true, phase: resume ? "review" : "view", fileName: upload.fileName, upload, error: null });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  /** An analysis whose worker died (e.g. the tab was closed mid-run on a cold server) can be cleared. */
+  const clearStuckUpload = async (summary: { id: string }) => {
+    if (!userId) return;
+    await api(`/api/uploads/${summary.id}/cancel`, { userId, method: "POST" }).catch(() => undefined);
+    refreshHistory();
+  };
 
   const handleFileSelect = async (content: string, fileName: string) => {
     if (!theater || !userId) return;
@@ -263,7 +303,7 @@ export default function Home() {
     try {
       const upload = await streamApi("/api/uploads", {
         userId,
-        body: { theaterId: theater.id, fileName, csv: content },
+        body: { theaterId: theater.id, fileName, csv: content, thinkingLevel },
         onEvent: onProgressEvent,
         signal: run.abort.signal,
       });
@@ -281,7 +321,7 @@ export default function Home() {
     try {
       const upload = await streamApi(`/api/uploads/${reconcile.upload.id}/retry`, {
         userId,
-        body: { feedback },
+        body: { feedback, thinkingLevel },
         onEvent: onProgressEvent,
         signal: run.abort.signal,
       });
@@ -302,6 +342,7 @@ export default function Home() {
       });
       openReconcile({ upload, phase: "done" });
       setReloadKey((k) => k + 1);
+      refreshHistory();
     } catch (e) {
       failReconcile(e);
     }
@@ -312,6 +353,7 @@ export default function Home() {
     setReconcile((r) => ({ ...r, open: false }));
     if (id && userId) {
       await api(`/api/uploads/${id}/discard`, { userId, method: "POST" }).catch(() => undefined);
+      refreshHistory();
     }
   };
 
@@ -406,6 +448,12 @@ export default function Home() {
           </div>
 
           <FileUpload onFileSelect={(c, n) => void handleFileSelect(c, n)} disabled={!isAdminHere} />
+          <ThinkingToggle
+            value={mode}
+            onChange={setChosenMode}
+            disabled={!isAdminHere}
+            aiConnected={scopebot?.aiConnected ?? true}
+          />
 
           <button
             onClick={handleClearSchedule}
@@ -499,6 +547,19 @@ export default function Home() {
           </>
         )}
 
+        {theater && userId && (
+          <div className="mt-6">
+            <UploadHistory
+              userId={userId}
+              theaterId={theater.id}
+              canReview={isAdminHere}
+              refreshKey={historyKey}
+              onOpen={(u) => void openUpload(u)}
+              onCancelStuck={(u) => void clearStuckUpload(u)}
+            />
+          </div>
+        )}
+
         <QueryInspector explain={explain} onExplainChange={setExplain} />
 
         <ReconcileModal
@@ -509,6 +570,7 @@ export default function Home() {
           upload={reconcile.upload}
           error={reconcile.error}
           progress={progress}
+          quick={mode === "quick"}
           onCancel={() => void handleCancelReconcile()}
           onStopAnalysis={handleStopAnalysis}
           onConfirm={(ids) => void handleConfirm(ids)}

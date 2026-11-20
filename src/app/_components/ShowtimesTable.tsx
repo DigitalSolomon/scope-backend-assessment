@@ -1,5 +1,6 @@
 "use client";
 
+import { formatShowtime } from "~/lib/format";
 import type {
   ApiShowtime,
   MovieStatus,
@@ -43,13 +44,7 @@ export function ShowtimesTable({
   onStatusChange,
   loading,
 }: ShowtimesTableProps) {
-  const formatDateTime = (date: string) =>
-    new Date(date).toLocaleString("en-US", {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+  const formatDateTime = formatShowtime;
 
   const SortIcon = ({ field }: { field: ShowtimeSortField }) => {
     if (sortField !== field) return <span className="ml-1 text-gray-500">↕</span>;

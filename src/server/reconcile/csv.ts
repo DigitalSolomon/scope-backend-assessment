@@ -38,9 +38,27 @@ export const MAX_CSV_ROWS = 500;
 const REQUIRED = ["theater_name", "movie_title", "auditorium", "start_time", "end_time"] as const;
 const OPTIONAL = ["language", "format", "rating", "last_updated"] as const;
 
-/** RFC 4180 parser: quoted fields, escaped quotes, commas/newlines in quotes, CRLF, BOM. */
+/**
+ * Spreadsheets in some locales export with ";" and some tools with tabs.
+ * Pick whichever of , ; tab appears most in the header line (outside quotes).
+ */
+export function detectDelimiter(text: string): "," | ";" | "\t" {
+  const counts = { ",": 0, ";": 0, "\t": 0 };
+  let inQuotes = false;
+  for (const ch of text) {
+    if (ch === '"') inQuotes = !inQuotes;
+    else if (!inQuotes && (ch === "\n" || ch === "\r")) break;
+    else if (!inQuotes && ch in counts) counts[ch as keyof typeof counts]++;
+  }
+  if (counts[";"] > counts[","] && counts[";"] >= counts["\t"]) return ";";
+  if (counts["\t"] > counts[","]) return "\t";
+  return ",";
+}
+
+/** RFC 4180 parser: quoted fields, escaped quotes, delimiters/newlines in quotes, CRLF, BOM. */
 export function parseCsvText(text: string): string[][] {
-  const src = text.replace(/^﻿/, "");
+  const src = text.replace(/^\uFEFF/, "");
+  const delimiter = detectDelimiter(src);
   const records: string[][] = [];
   let field = "";
   let record: string[] = [];
@@ -56,7 +74,7 @@ export function parseCsvText(text: string): string[][] {
       } else field += ch;
     } else if (ch === '"' && field === "") {
       inQuotes = true;
-    } else if (ch === ",") {
+    } else if (ch === delimiter) {
       record.push(field);
       field = "";
     } else if (ch === "\n" || ch === "\r") {
@@ -86,9 +104,12 @@ function toIso(value: string): string | null {
 }
 
 const headerKey = (h: string) =>
-  h.replace(/^﻿/, "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  h.replace(/^\uFEFF/, "").trim().toLowerCase().replace(/[\s-]+/g, "_");
 
 export function parseShowtimeCsv(text: string): ParsedCsv {
+  if (text.includes("\u0000")) {
+    throw new CsvError("That doesn't look like a CSV text file (it may be a spreadsheet or an image). Export it as .csv and try again.");
+  }
   if (new TextEncoder().encode(text).length > MAX_CSV_BYTES) {
     throw new CsvError("The file is larger than 1 MB.");
   }
@@ -139,5 +160,12 @@ export function parseShowtimeCsv(text: string): ParsedCsv {
       raw,
     });
   });
+  if (rows.length === 0) {
+    // Nothing to reconcile: say why instead of sending an empty file to the model.
+    const reasons = invalid.slice(0, 3).map((i) => `row ${i.row}: ${i.reason}`).join("; ");
+    throw new CsvError(
+      `None of the ${invalid.length} row${invalid.length === 1 ? "" : "s"} could be used (${reasons}${invalid.length > 3 ? "; …" : ""}).`,
+    );
+  }
   return { rows, invalid, headers, ignoredColumns };
 }

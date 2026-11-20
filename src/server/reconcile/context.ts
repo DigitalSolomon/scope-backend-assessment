@@ -85,7 +85,44 @@ export function similarity(a: string, b: string): number {
   return Math.round(Math.max(jaccard, edit) * 100) / 100;
 }
 
+/**
+ * Same room? Numbers must agree and the words of one name must contain the
+ * other's: "Aud 1" = "Auditorium One" = "Auditorium 1 (Laser)", but
+ * "Auditorium 1" is not "Auditorium 2" (edit distance alone would say 91%).
+ */
+export function sameRoom(a: string, b: string): boolean {
+  const split = (v: string) => {
+    const t = tokens(v);
+    return { nums: t.filter((x) => /^\d+$/.test(x)).sort().join(","), words: new Set(t.filter((x) => !/^\d+$/.test(x))) };
+  };
+  const x = split(a);
+  const y = split(b);
+  if (x.nums !== y.nums) return false;
+  if (!x.nums && !x.words.size && !y.words.size) return false;
+  const [small, big] = x.words.size <= y.words.size ? [x.words, y.words] : [y.words, x.words];
+  return [...small].every((w) => big.has(w));
+}
+
+/**
+ * Does a row's theater_name mean this theater? Blank counts as yes (the
+ * upload already targets one theater); so do a close spelling or a shorter
+ * or longer form ("Downtown Cinema" / "Downtown Cinema 7").
+ */
+export function sameTheater(fileName: string, theaterName: string): boolean {
+  if (!fileName.trim()) return true;
+  if (similarity(fileName, theaterName) >= 0.6) return true;
+  const a = new Set(tokens(fileName));
+  const b = new Set(tokens(theaterName));
+  const [small, big] = a.size <= b.size ? [a, b] : [b, a];
+  return small.size > 0 && [...small].every((t) => big.has(t));
+}
+
+/** Same film, allowing spelling noise ("Spider Man - Homecoming"). */
+export const sameFilm = (a: string, b: string) => normalizeKey(a) === normalizeKey(b) || similarity(a, b) >= 0.9;
+
 // ------------------------------------------------------------ loading
+
+const MARGIN_MS = 3 * 3600_000;
 
 /** UTC calendar days the file touches, and the [from, to) window covering them. */
 function windowFor(rows: CsvRow[]) {
@@ -146,6 +183,26 @@ export async function loadContext(theaterId: string, rows: CsvRow[]): Promise<Re
   const auditoriums = await sql<{ id: string; name: string }[]>`
     select id, name from hv_theater.auditoriums where theater_id = ${theaterId} order by name`;
 
+  return buildContext(theater, stored, auditoriums, rows);
+}
+
+/**
+ * Pure part of context building: the window the file covers and, per CSV row,
+ * the stored showtimes it could plausibly be. No database access, so tests
+ * and evals can run it on fixture schedules.
+ */
+export function buildContext(
+  theater: ReconcileContext["theater"],
+  stored: StoredShowtime[],
+  auditoriums: { id: string; name: string }[],
+  rows: CsvRow[],
+): ReconcileContext {
+  const window = rows.length ? windowFor(rows) : { from: "", to: "", days: [] as string[] };
+  // Same 3h margin the loader's query uses, so fixture schedules behave like the database.
+  const lo = Date.parse(window.from) - MARGIN_MS;
+  const hi = Date.parse(window.to) + MARGIN_MS;
+  stored = rows.length ? stored.filter((s) => Date.parse(s.startTime) >= lo && Date.parse(s.startTime) < hi) : [];
+
   // Candidates: same start time (any title), or a similar title within 3h.
   const candidates = new Map<number, Candidate[]>();
   for (const row of rows) {
@@ -153,7 +210,7 @@ export async function loadContext(theaterId: string, rows: CsvRow[]): Promise<Re
     const list: Candidate[] = [];
     for (const s of stored) {
       const sameStart = s.startTime === row.startTime;
-      const near = Math.abs(Date.parse(s.startTime) - t) <= 3 * 3600_000;
+      const near = Math.abs(Date.parse(s.startTime) - t) <= MARGIN_MS;
       if (!sameStart && !near) continue;
       const titleSimilarity = similarity(row.movieTitle, s.movieTitle);
       if (!sameStart && titleSimilarity < 0.6) continue;

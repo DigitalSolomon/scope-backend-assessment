@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { env } from "~/env";
 import { sql } from "~/server/db";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +16,12 @@ export async function GET() {
         connected: row?.ok === 1,
         serverTime: row?.now,
         latencyMs: Date.now() - started,
+      },
+      // No secrets: whether the AI is connected and its defaults (the UI's Quick / Thorough toggle starts here).
+      scopebot: {
+        aiConnected: Boolean(env.GEMINI_API_KEY),
+        model: env.GEMINI_MODEL,
+        thinkingLevel: env.GEMINI_THINKING_LEVEL,
       },
     });
   } catch (error) {

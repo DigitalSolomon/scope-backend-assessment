@@ -10,6 +10,8 @@ import {
   type ShowtimeSearchResponse,
   type ShowtimeSortField,
 } from "~/types/assessment";
+import { normalizeKey } from "~/lib/normalize";
+import { HttpError } from "./access";
 import { sql } from "./db";
 
 const SORT_FIELDS = [
@@ -110,7 +112,8 @@ function list(fragments: ReturnType<typeof sql>[]) {
 
 const encodeCursor = (values: string[]) => Buffer.from(JSON.stringify(values)).toString("base64url");
 
-function decodeCursor(cursor: string, length: number): string[] | null {
+/** A cursor that does not decode for this sort is a client error, not "start again from page 1". */
+export function decodeCursor(cursor: string, length: number): string[] {
   try {
     const parsed: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString());
     if (Array.isArray(parsed) && parsed.length === length && parsed.every((p) => typeof p === "string")) {
@@ -119,7 +122,23 @@ function decodeCursor(cursor: string, length: number): string[] | null {
   } catch {
     // fall through
   }
-  return null;
+  throw new HttpError(400, "Invalid cursor for this sort; request the first page again");
+}
+
+/**
+ * Title search matches the text as typed, or ignoring punctuation and
+ * spacing, so "spider man" and "spiderman" both find "Spider-Man: Homecoming".
+ */
+export function titleSearchTerms(q: string): { like: string; squashed: string | null } {
+  const squashed = normalizeKey(q).replace(/ /g, "");
+  return { like: `%${escapeLike(q)}%`, squashed: squashed.length >= 2 ? `%${squashed}%` : null };
+}
+
+function titleFilter(q: string) {
+  const { like, squashed } = titleSearchTerms(q);
+  return squashed
+    ? sql`and (m.title ilike ${like} or replace(m.title_key, ' ', '') like ${squashed})`
+    : sql`and m.title ilike ${like}`;
 }
 
 const COUNT_CAP = 10_000;
@@ -138,7 +157,7 @@ function filters(p: SearchParams) {
   };
   return sql`
     ${p.theaterId ? sql`and s.theater_id = ${p.theaterId}` : sql``}
-    ${p.q ? sql`and m.title ilike ${"%" + escapeLike(p.q) + "%"}` : sql``}
+    ${p.q ? titleFilter(p.q) : sql``}
     ${p.status ? sql`and s.status = ${p.status}::hv_theater.showtime_status` : sql``}
     ${p.format ? sql`and s.format = ${p.format}` : sql``}
     ${p.language ? sql`and s.language = ${p.language}` : sql``}

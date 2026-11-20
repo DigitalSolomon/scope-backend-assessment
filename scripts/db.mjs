@@ -142,7 +142,10 @@ async function seed() {
         status = excluded.status, last_updated = excluded.last_updated,
         version = hv_theater.showtimes.version + 1`;
     // The mock PreviewChanges become example upload records, so the stored
-    // shape (upload -> changes -> diffs, plus its event log) is visible.
+    // shape (upload -> changes -> diffs, plus its event log) is visible. They
+    // are stored as discarded: a finished, read-only example in the upload
+    // history, never something a reviewer could apply (the mock diffs would
+    // overwrite clean titles with the CSV's messy spellings).
     const byId = new Map(showtimes.map((st) => [st.id, st]));
     for (const [theaterId, preview] of Object.entries(assessmentData.previewChangesByTheater)) {
       const total = preview.adds.length + preview.updates.length + preview.archives.length;
@@ -152,12 +155,12 @@ async function seed() {
       await tx`
         insert into hv_theater.csv_uploads
           (id, theater_id, uploaded_by, file_name, row_count, status, summary,
-           adds_count, updates_count, archives_count, created_at, analyzed_at)
+           adds_count, updates_count, archives_count, created_at, analyzed_at, completed_at)
         values
-          (${uploadId}, ${theaterId}, ${"user-admin-avery"}, ${"new-drop.csv"}, ${total},
-           'pending_review', ${"Example proposal carried over from the original mock data."},
+          (${uploadId}, ${theaterId}, ${"user-admin-avery"}, ${"example-mock-preview.csv"}, ${total},
+           'discarded', ${"Example proposal carried over from the original mock data."},
            ${preview.adds.length}, ${preview.updates.length}, ${preview.archives.length},
-           now() - interval '5 minutes', now() - interval '4 minutes')`;
+           now() - interval '5 minutes', now() - interval '4 minutes', now() - interval '3 minutes')`;
 
       let position = 0;
       const changes = [];
@@ -205,7 +208,8 @@ async function seed() {
         values
           (${uploadId}, 'status', 'received', 'File received', 'user-admin-avery', now() - interval '5 minutes'),
           (${uploadId}, 'status', 'analyzing', 'Matching rows against the stored schedule', null, now() - interval '5 minutes'),
-          (${uploadId}, 'status', 'pending_review', ${`${total} changes proposed`}, null, now() - interval '4 minutes')`;
+          (${uploadId}, 'status', 'pending_review', ${`${total} changes proposed`}, null, now() - interval '4 minutes'),
+          (${uploadId}, 'status', 'discarded', 'Example record from the original mock data; nothing was applied', null, now() - interval '3 minutes')`;
     }
   });
 
@@ -251,6 +255,10 @@ async function seedScale() {
 
   const t0 = Date.now();
   await sql.begin(async (tx) => {
+    // Bulk inserts with foreign-key checks can exceed the database's default
+    // statement timeout on a small shared instance; lift it for this
+    // transaction only. If anything fails, the whole load rolls back.
+    await tx`set local statement_timeout = 0`;
     await tx`
       insert into hv_theater.theaters (id, name, location, timezone)
       select
@@ -285,11 +293,16 @@ async function seedScale() {
       ) m
       on conflict do nothing`;
 
+    // Refresh planner statistics before each dependent load, so the
+    // per-row foreign-key lookups are planned for the tables' real sizes.
+    await tx.unsafe("analyze hv_theater.theaters, hv_theater.movies");
+
     await tx`
       insert into hv_theater.auditoriums (id, theater_id, name, name_key)
       select 'scale-a' || t || '-' || a, 'scale-t' || t, 'Auditorium ' || a, 'auditorium ' || a
       from generate_series(1, ${theaters}) t, generate_series(1, ${audsPerTheater}) a
       on conflict do nothing`;
+    await tx.unsafe("analyze hv_theater.auditoriums");
 
     await tx`
       insert into hv_theater.showtimes

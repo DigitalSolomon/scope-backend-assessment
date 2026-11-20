@@ -124,6 +124,8 @@ export interface ApiChange {
   decision: "pending" | "accepted" | "rejected";
   diffs: FieldDiff[];
   applyError: string | null;
+  /** When this change was written to the schedule (null if not applied). */
+  appliedAt: string | null;
 }
 
 export interface ApiUploadSummary {
@@ -164,6 +166,13 @@ export interface ApiUploadDetail extends ApiUploadSummary {
   source: "agent" | "rule";
   /** The model's thought summaries, when available. */
   thoughts: string[];
+  /** Thinking level the proposal was produced at ("low" = Quick, "medium" = Thorough); null for rule-based. */
+  thinkingLevel: string | null;
+  /**
+   * Whether archive proposals start ticked. On a first pass they do not: a
+   * showtime missing from a file is a suggestion, since the file may be a patch.
+   */
+  archivesPreselected: boolean;
   /** Proposed changes in the same shape the preview modal renders. */
   changes: PreviewChanges;
   /** Every proposed action, including unchanged / duplicate / invalid rows. */

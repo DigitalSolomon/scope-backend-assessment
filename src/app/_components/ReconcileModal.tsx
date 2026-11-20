@@ -1,11 +1,13 @@
 "use client";
 
+import { formatShowtime } from "~/lib/format";
 import { useEffect, useMemo, useState } from "react";
 import type { ApiChange, ApiUploadDetail } from "~/types/assessment";
 import { ScopeBot, SpeechBubble } from "./ScopeBot";
 import { ThinkingPanel, type ReconcileProgress } from "./ThinkingPanel";
 
-export type ReconcilePhase = "thinking" | "review" | "feedback" | "applying" | "done" | "error";
+/** "view" is a read-only look at a past upload, opened from the upload history. */
+export type ReconcilePhase = "thinking" | "review" | "feedback" | "applying" | "done" | "error" | "view";
 
 interface ReconcileModalProps {
   open: boolean;
@@ -16,6 +18,8 @@ interface ReconcileModalProps {
   error: string | null;
   /** Live, streamed progress while ScopeBot works. */
   progress: ReconcileProgress;
+  /** The reviewer chose Quick mode (less reasoning, faster). */
+  quick: boolean;
   onCancel: () => void;
   /** Stop an analysis in progress (thinking phase). */
   onStopAnalysis: () => void;
@@ -28,10 +32,7 @@ interface ReconcileModalProps {
 
 const ACTIONABLE = new Set(["add", "update", "reactivate", "archive"]);
 
-const formatDateTime = (iso: string) =>
-  iso
-    ? new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
-    : "";
+const formatDateTime = formatShowtime;
 
 const FIELD_LABELS: Record<string, string> = {
   movieTitle: "title",
@@ -65,16 +66,26 @@ function ConfidenceChip({ value }: { value: number | null }) {
   return <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${tone}`}>{pct}% sure</span>;
 }
 
+/** What happened to a change, for the read-only view of a past upload. */
+function outcomeOf(item: ApiChange): { label: string; className: string } {
+  if (item.applyError) return { label: "failed", className: "bg-red-900/70 text-red-200" };
+  if (item.appliedAt) return { label: "applied", className: "bg-green-900/70 text-green-200" };
+  if (item.decision === "rejected") return { label: "not selected", className: "bg-gray-700 text-gray-300" };
+  return { label: "not applied", className: "bg-gray-700 text-gray-300" };
+}
+
 function ChangeCard({
   item,
   tone,
   rejected,
   onToggle,
+  readOnly = false,
 }: {
   item: ApiChange;
   tone: "green" | "yellow" | "red";
   rejected: boolean;
   onToggle: () => void;
+  readOnly?: boolean;
 }) {
   const tones = {
     green: "border-green-900 bg-green-950/40",
@@ -82,7 +93,7 @@ function ChangeCard({
     red: "border-red-900 bg-red-950/40",
   };
   return (
-    <div className={`rounded-lg border p-4 transition-opacity ${tones[tone]} ${rejected ? "opacity-40" : ""}`}>
+    <div className={`rounded-lg border p-4 transition-opacity ${tones[tone]} ${rejected && !readOnly ? "opacity-40" : ""}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="font-semibold text-white">
@@ -97,10 +108,16 @@ function ChangeCard({
             {formatDateTime(item.startTime)} – {formatDateTime(item.endTime)}
           </div>
         </div>
-        <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-gray-400">
-          <input type="checkbox" checked={!rejected} onChange={onToggle} className="accent-purple-500" />
-          apply
-        </label>
+        {readOnly ? (
+          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${outcomeOf(item).className}`}>
+            {outcomeOf(item).label}
+          </span>
+        ) : (
+          <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-gray-400">
+            <input type="checkbox" checked={!rejected} onChange={onToggle} className="accent-purple-500" />
+            apply
+          </label>
+        )}
       </div>
       {item.kind === "add" && (
         <div className="mt-2 flex flex-wrap gap-2 text-xs text-gray-400">
@@ -133,7 +150,7 @@ function ChangeCard({
   );
 }
 
-function Section({ title, color, items, children }: { title: string; color: string; items: number; children: React.ReactNode }) {
+function Section({ title, color, items, note, children }: { title: string; color: string; items: number; note?: string; children: React.ReactNode }) {
   if (!items) return null;
   return (
     <div>
@@ -141,6 +158,7 @@ function Section({ title, color, items, children }: { title: string; color: stri
         <span className="mr-2 flex h-6 w-6 items-center justify-center rounded-full bg-white/10 text-xs">{items}</span>
         {title}
       </h3>
+      {note && <p className="-mt-1 mb-3 text-sm text-gray-400">{note}</p>}
       <div className="space-y-2">{children}</div>
     </div>
   );
@@ -181,8 +199,22 @@ export function ReconcileModal(props: ReconcileModalProps) {
     return () => window.clearInterval(id);
   }, [open, phase]);
 
-  // Fresh proposal => everything selected again.
-  useEffect(() => setRejected(new Set()), [upload?.id, upload?.analyzedAt]);
+  // Fresh proposal => default selection again. Showings that are merely
+  // missing from the file start unticked: the file may be a patch, so
+  // archiving them is the reviewer's call.
+  useEffect(() => {
+    const suggestions = upload && !upload.archivesPreselected ? upload.items.filter((i) => i.kind === "archive").map((i) => i.id) : [];
+    setRejected(new Set(suggestions));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [upload?.id, upload?.analyzedAt]);
+  // A read-only view has nothing to lose, so Escape closes it.
+  const { onClose } = props;
+  useEffect(() => {
+    if (!open || phase !== "view") return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, phase, onClose]);
   useEffect(() => {
     if (phase === "feedback") setFeedback("");
   }, [phase]);
@@ -225,6 +257,7 @@ export function ReconcileModal(props: ReconcileModalProps) {
             progress={props.progress}
             fallbackLine={line}
             title={retrying ? "Taking another look with your feedback" : `Analyzing ${fileName}`}
+            quick={props.quick}
           />
           <div className="mt-5 flex items-center justify-end gap-3 border-t border-gray-800 pt-4">
             <span className="text-xs text-gray-500">
@@ -250,7 +283,11 @@ export function ReconcileModal(props: ReconcileModalProps) {
         ? `All set! I applied ${upload.appliedCount} change${upload.appliedCount === 1 ? "" : "s"} to ${theaterName}.`
         : upload?.status === "partially_applied"
           ? `I applied ${upload.appliedCount}, but ${upload.failedCount} couldn't be saved. The details are in the upload history.`
-          : "Done.";
+          : upload?.status === "failed"
+            ? "None of the changes could be saved. The reasons are in the upload history."
+            : upload?.status === "discarded"
+              ? "Okay, nothing was applied."
+              : "Done.";
     const text =
       phase === "error"
         ? error ?? upload?.error ?? "Something went wrong."
@@ -276,9 +313,27 @@ export function ReconcileModal(props: ReconcileModalProps) {
   }
 
   // ----------------------------------------------------------- review (+ feedback overlay)
-  const total = groups.adds.length + groups.updates.length + groups.archives.length;
+  const readOnly = phase === "view";
+  const suggestedArchives = Boolean(upload) && !upload!.archivesPreselected;
+  const total = groups.adds.length + groups.updates.length + (suggestedArchives ? 0 : groups.archives.length);
+  const plural = (n: number) => `${n} change${n === 1 ? "" : "s"}`;
+  const pastText =
+    upload?.status === "applied"
+      ? `I applied ${plural(upload.appliedCount)} from this file.`
+      : upload?.status === "partially_applied"
+        ? `I applied ${plural(upload.appliedCount)}; ${upload.failedCount} couldn't be saved.`
+        : upload?.status === "discarded"
+          ? "This proposal was discarded. Nothing was applied."
+          : upload?.status === "failed"
+            ? `This upload failed: ${upload.error ?? "unknown error"}`
+            : upload?.status === "analyzing" || upload?.status === "received"
+              ? "This upload never finished analyzing."
+              : null;
   const botText =
-    upload?.botMessage ?? (total ? `I see ${total} change${total === 1 ? "" : "s"}. Does this look right?` : "Everything already matches. Nothing to change!");
+    (readOnly ? pastText : null) ??
+    upload?.botMessage ??
+    (total ? `I see ${plural(total)}. Does this look right?` : "Everything already matches. Nothing to change!");
+  const when = (iso: string) => new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 sm:p-4">
@@ -286,12 +341,21 @@ export function ReconcileModal(props: ReconcileModalProps) {
         {/* Header with ScopeBot top-right, per the wireframe */}
         <div className="relative z-10 border-b border-gray-700 px-6 pt-5 pb-4">
           <h2 className="text-2xl font-bold text-white">
-            Preview Changes
-            <span className="ml-2 text-sm text-gray-400">({total} total)</span>
+            {readOnly ? "Upload Details" : "Preview Changes"}
+            <span className="ml-2 text-sm text-gray-400">
+              {readOnly ? `(${upload?.status.replace("_", " ")})` : `(${total} total)`}
+            </span>
           </h2>
           <p className="mt-1 text-xs text-gray-500">
             {fileName} → {theaterName}
-            {upload?.model && <> · analyzed by {upload.model}</>}
+            {upload?.model && (
+              <>
+                {" "}
+                · analyzed by {upload.model}
+                {upload.thinkingLevel && ` (${upload.thinkingLevel === "low" || upload.thinkingLevel === "minimal" ? "quick" : "thorough"})`}
+              </>
+            )}
+            {readOnly && upload && <> · uploaded by {upload.uploadedByName ?? "unknown"}, {when(upload.createdAt)}</>}
           </p>
           <div className="absolute top-2 right-2 flex items-start gap-2 sm:right-4">
             <SpeechBubble text={botText} tail="right" className="mt-6 hidden max-w-sm sm:block" />
@@ -316,23 +380,32 @@ export function ReconcileModal(props: ReconcileModalProps) {
             </ul>
           )}
 
-          {total === 0 && (
+          {total === 0 && groups.archives.length === 0 && !readOnly && (
             <p className="text-center text-gray-400">No changes needed. The schedule already matches this file.</p>
           )}
 
           <Section title="New Showtimes" color="text-green-400" items={groups.adds.length}>
             {groups.adds.map((i) => (
-              <ChangeCard key={i.id} item={i} tone="green" rejected={rejected.has(i.id)} onToggle={() => toggle(i.id)} />
+              <ChangeCard key={i.id} item={i} tone="green" rejected={rejected.has(i.id)} onToggle={() => toggle(i.id)} readOnly={readOnly} />
             ))}
           </Section>
           <Section title="Updated Showtimes" color="text-yellow-400" items={groups.updates.length}>
             {groups.updates.map((i) => (
-              <ChangeCard key={i.id} item={i} tone="yellow" rejected={rejected.has(i.id)} onToggle={() => toggle(i.id)} />
+              <ChangeCard key={i.id} item={i} tone="yellow" rejected={rejected.has(i.id)} onToggle={() => toggle(i.id)} readOnly={readOnly} />
             ))}
           </Section>
-          <Section title="Archived Showtimes" color="text-red-400" items={groups.archives.length}>
+          <Section
+            title={suggestedArchives ? "Not in This File" : "Archived Showtimes"}
+            color="text-red-400"
+            items={groups.archives.length}
+            note={
+              suggestedArchives && !readOnly
+                ? "These active showings are on days this file covers but aren't in it. If the file is the full schedule for those days, tick the ones to archive; if it's a partial update, leave them."
+                : undefined
+            }
+          >
             {groups.archives.map((i) => (
-              <ChangeCard key={i.id} item={i} tone="red" rejected={rejected.has(i.id)} onToggle={() => toggle(i.id)} />
+              <ChangeCard key={i.id} item={i} tone="red" rejected={rejected.has(i.id)} onToggle={() => toggle(i.id)} readOnly={readOnly} />
             ))}
           </Section>
 
@@ -351,9 +424,34 @@ export function ReconcileModal(props: ReconcileModalProps) {
                 ))}
               </details>
             )}
+            {readOnly && (upload?.events.length ?? 0) > 0 && (
+              <details open className="rounded-lg border border-gray-800 bg-gray-950/50 p-3 text-sm text-gray-400">
+                <summary className="cursor-pointer select-none font-medium text-gray-300">Activity log</summary>
+                <ul className="mt-2 space-y-1">
+                  {upload!.events.map((e) => (
+                    <li key={e.id}>
+                      <span className="text-gray-500">{when(e.createdAt)}</span>{" "}
+                      <span className={e.kind === "error" ? "text-red-300" : e.kind === "feedback" ? "text-purple-300" : "text-gray-300"}>
+                        {e.kind === "feedback" ? `Feedback: “${e.message}”` : (e.message ?? e.status)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
           </div>
         </div>
 
+        {readOnly ? (
+          <div className="flex justify-end border-t border-gray-700 px-6 py-4">
+            <button
+              onClick={props.onClose}
+              className="rounded-lg bg-purple-600 px-8 py-2 font-medium text-white transition hover:bg-purple-700"
+            >
+              Close
+            </button>
+          </div>
+        ) : (
         <div className="flex flex-wrap justify-end gap-3 border-t border-gray-700 px-6 py-4">
           <button
             onClick={props.onCancel}
@@ -375,6 +473,7 @@ export function ReconcileModal(props: ReconcileModalProps) {
             Confirm {selectedCount !== actionable.length ? `${selectedCount} of ${actionable.length}` : "Changes"}
           </button>
         </div>
+        )}
 
         {/* Feedback overlay */}
         {phase === "feedback" && (

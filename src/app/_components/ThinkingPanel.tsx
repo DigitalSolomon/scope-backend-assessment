@@ -58,10 +58,13 @@ export function ThinkingPanel({
   progress,
   fallbackLine,
   title,
+  quick = false,
 }: {
   progress: ReconcileProgress;
   fallbackLine: string;
   title: string;
+  /** Quick mode: faster, and Gemini rarely narrates its reasoning. */
+  quick?: boolean;
 }) {
   const [now, setNow] = useState(Date.now());
   const feedRef = useRef<HTMLDivElement>(null);
@@ -89,7 +92,9 @@ export function ThinkingPanel({
     elapsed > 60
       ? "Taking longer than usual, but I'm still on it."
       : thinking && elapsed > 8
-        ? "Gemini usually takes 20–40 seconds on a file like this."
+        ? quick
+          ? "Quick mode usually takes about 10 seconds."
+          : "Gemini usually takes 20–40 seconds on a file like this."
         : null;
 
   return (
@@ -149,7 +154,11 @@ export function ThinkingPanel({
           <div ref={feedRef} className="max-h-56 space-y-3 overflow-y-auto px-3 py-3" aria-live="polite">
             {progress.thoughts.length === 0 ? (
               <p className="text-sm text-gray-600">
-                {progress.steps.model ? "Warming up…" : "Thoughts will appear here once I start reasoning."}
+                {quick
+                  ? "Quick mode skips most of the step-by-step reasoning. Switch to Thorough to watch me think."
+                  : progress.steps.model
+                    ? "Warming up…"
+                    : "Thoughts will appear here once I start reasoning."}
               </p>
             ) : (
               progress.thoughts.map((t, i) => {

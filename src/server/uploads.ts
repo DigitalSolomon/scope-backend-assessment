@@ -50,6 +50,7 @@ type ChangeRow = {
   source: ApiChange["source"];
   decision: ApiChange["decision"];
   apply_error: string | null;
+  applied_at: Date | null;
   diffs: FieldDiff[] | null;
 };
 
@@ -58,6 +59,8 @@ type AnalysisDetail = {
   botMessage?: string;
   source?: "agent" | "rule";
   thoughts?: string[];
+  archivesPreselected?: boolean;
+  thinkingLevel?: string | null;
 };
 
 /** One upload with its proposed changes, ScopeBot's message and the event log. */
@@ -77,7 +80,7 @@ export async function getUpload(userId: string, uploadId: string): Promise<ApiUp
     sql<ChangeRow[]>`
       select c.id, c.kind, c.csv_rows, c.showtime_id, c.movie_title, c.auditorium, c.start_time,
              c.end_time, c.language, c.format, c.rating, c.explanation, c.confidence, c.source,
-             c.decision, c.apply_error,
+             c.decision, c.apply_error, c.applied_at,
              (select json_agg(json_build_object('field', d.field, 'oldValue', d.old_value, 'newValue', d.new_value)
                               order by d.field)
               from hv_theater.upload_change_diffs d where d.change_id = c.id) as diffs
@@ -114,6 +117,7 @@ export async function getUpload(userId: string, uploadId: string): Promise<ApiUp
     decision: r.decision,
     diffs: r.diffs ?? [],
     applyError: r.apply_error,
+    appliedAt: r.applied_at?.toISOString() ?? null,
   }));
 
   // PreviewChanges view (the shape the original mock modal used).
@@ -139,6 +143,9 @@ export async function getUpload(userId: string, uploadId: string): Promise<ApiUp
     botMessage: a.botMessage ?? null,
     source: a.source ?? (upload.model ? "agent" : "rule"),
     thoughts: a.thoughts ?? [],
+    thinkingLevel: a.thinkingLevel ?? null,
+    // Proposals saved before this flag existed had their archives ticked.
+    archivesPreselected: a.archivesPreselected ?? true,
     changes,
     items,
     events,
