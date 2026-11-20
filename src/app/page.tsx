@@ -72,6 +72,8 @@ export default function Home() {
     error: string | null;
   }>({ open: false, phase: "thinking", fileName: "", upload: null, error: null });
   const [progress, setProgress] = useState<ReconcileProgress>(emptyProgress);
+  // The analysis in flight: its stream, its upload id (from the `started` event), and whether Cancel was pressed.
+  const analysisRef = useRef<{ abort: AbortController; uploadId: string | null; cancelled: boolean; retryOf: ApiUploadDetail | null } | null>(null);
 
   const isAdminHere = theater?.role === "admin";
   const hasTheaters = (user?.theaterCount ?? 0) > 0;
@@ -199,14 +201,54 @@ export default function Home() {
   const failReconcile = (e: unknown) =>
     openReconcile({ phase: "error", error: e instanceof Error ? e.message : "Something went wrong." });
 
+  /** Tell the server to stop, then drop the stream. Before `started` arrives there is no id yet; the event handler finishes the job. */
+  const sendCancel = (run: NonNullable<typeof analysisRef.current>) => {
+    if (!run.uploadId || !userId) return;
+    run.abort.abort();
+    const retryOf = run.retryOf;
+    void api<{ cancelled: boolean; upload: ApiUploadDetail }>(`/api/uploads/${run.uploadId}/cancel`, { userId, method: "POST" })
+      .then(async ({ cancelled, upload }) => {
+        if (cancelled) return;
+        // It finished just before the cancel landed.
+        if (retryOf) openReconcile({ upload, phase: "review", error: null });
+        else if (upload.status === "pending_review") {
+          await api(`/api/uploads/${upload.id}/discard`, { userId, method: "POST" });
+        }
+      })
+      .catch(() => undefined);
+  };
+
+  const handleStopAnalysis = () => {
+    const run = analysisRef.current;
+    if (!run || run.cancelled) return;
+    run.cancelled = true;
+    // Update the UI right away; the server catches up within a couple of seconds.
+    if (run.retryOf) openReconcile({ upload: run.retryOf, phase: "review", error: null });
+    else setReconcile((r) => ({ ...r, open: false }));
+    sendCancel(run);
+  };
+
+  const startAnalysis = (retryOf: ApiUploadDetail | null) => {
+    analysisRef.current?.abort.abort();
+    const run = { abort: new AbortController(), uploadId: null, cancelled: false, retryOf };
+    analysisRef.current = run;
+    return run;
+  };
+
   // Streamed progress: every event (including heartbeats) proves the connection is alive.
-  const onProgressEvent = (e: ReconcileEvent) =>
+  const onProgressEvent = (e: ReconcileEvent) => {
+    const run = analysisRef.current;
+    if (e.type === "started" && run) {
+      run.uploadId = e.uploadId;
+      if (run.cancelled) sendCancel(run);
+    }
     setProgress((p) => {
       const next = { ...p, lastEventAt: Date.now() };
       if (e.type === "step") next.steps = { ...p.steps, [e.key]: { state: e.state, label: e.label } };
       else if (e.type === "thought") next.thoughts = [...p.thoughts, e.text];
       return next;
     });
+  };
 
   const finishAnalysis = (upload: ApiUploadDetail) =>
     upload.status === "failed"
@@ -217,16 +259,17 @@ export default function Home() {
     if (!theater || !userId) return;
     setProgress(emptyProgress());
     setReconcile({ open: true, phase: "thinking", fileName, upload: null, error: null });
+    const run = startAnalysis(null);
     try {
-      finishAnalysis(
-        await streamApi("/api/uploads", {
-          userId,
-          body: { theaterId: theater.id, fileName, csv: content },
-          onEvent: onProgressEvent,
-        }),
-      );
+      const upload = await streamApi("/api/uploads", {
+        userId,
+        body: { theaterId: theater.id, fileName, csv: content },
+        onEvent: onProgressEvent,
+        signal: run.abort.signal,
+      });
+      if (!run.cancelled) finishAnalysis(upload);
     } catch (e) {
-      failReconcile(e);
+      if (!run.cancelled) failReconcile(e);
     }
   };
 
@@ -234,16 +277,17 @@ export default function Home() {
     if (!reconcile.upload || !userId) return;
     setProgress(emptyProgress());
     openReconcile({ phase: "thinking" });
+    const run = startAnalysis(reconcile.upload);
     try {
-      finishAnalysis(
-        await streamApi(`/api/uploads/${reconcile.upload.id}/retry`, {
-          userId,
-          body: { feedback },
-          onEvent: onProgressEvent,
-        }),
-      );
+      const upload = await streamApi(`/api/uploads/${reconcile.upload.id}/retry`, {
+        userId,
+        body: { feedback },
+        onEvent: onProgressEvent,
+        signal: run.abort.signal,
+      });
+      if (!run.cancelled) finishAnalysis(upload);
     } catch (e) {
-      failReconcile(e);
+      if (!run.cancelled) failReconcile(e);
     }
   };
 
@@ -466,6 +510,7 @@ export default function Home() {
           error={reconcile.error}
           progress={progress}
           onCancel={() => void handleCancelReconcile()}
+          onStopAnalysis={handleStopAnalysis}
           onConfirm={(ids) => void handleConfirm(ids)}
           onRequestFeedback={() => openReconcile({ phase: "feedback" })}
           onRetry={(feedback) => void handleRetry(feedback)}

@@ -15,7 +15,8 @@ export const wantsStream = (request: Request) =>
  * sees a silent connection), then a final `result` or `error`.
  *
  * If the browser disconnects, the job keeps running; its outcome is stored
- * on the upload record either way.
+ * on the upload record either way. To stop it, call POST /api/uploads/:id/cancel
+ * (the job watches the upload's status and aborts its model request).
  */
 export function ndjson(job: (send: (e: ReconcileEvent) => void) => Promise<ApiUploadDetail | null>): Response {
   const encoder = new TextEncoder();

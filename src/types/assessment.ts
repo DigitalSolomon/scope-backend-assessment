@@ -177,6 +177,7 @@ export type ReconcileStepKey = "received" | "parsed" | "context" | "model" | "ve
 
 /** Newline-delimited JSON events streamed by POST /api/uploads and /retry. */
 export type ReconcileEvent =
+  | { type: "started"; uploadId: string }
   | { type: "step"; key: ReconcileStepKey; state: "active" | "done" | "warn"; label: string }
   | { type: "thought"; text: string }
   | { type: "ping"; elapsedMs: number }

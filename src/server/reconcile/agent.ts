@@ -3,6 +3,7 @@ import "server-only";
 import type { ReconcileEvent } from "~/types/assessment";
 import type { CsvRow, InvalidRow } from "./csv";
 import { archiveCandidates, agentPlanJsonSchema, agentPlanSchema, materialize, rulePlan, type AgentPlan, type ChangeDraft } from "./plan";
+import { CancelledError } from "./cancel";
 import { GeminiError, generateJson, geminiConfigured } from "./gemini";
 import type { ReconcileContext } from "./context";
 
@@ -126,6 +127,7 @@ export async function runAgent(
   invalid: InvalidRow[],
   feedback?: { text: string; previous: unknown },
   progress: (e: ReconcileEvent) => void = () => undefined,
+  signal?: AbortSignal,
 ): Promise<AgentOutcome & { plan: AgentPlan }> {
   const fallback = rulePlan(ctx, rows);
   const warnings: string[] = [];
@@ -156,7 +158,7 @@ export async function runAgent(
           : `Thinking it through with ${model}…`,
       });
     const onThought = (text: string) => progress({ type: "thought", text });
-    const result = await generateJson(input, agentPlanJsonSchema, { onAttempt, onThought });
+    const result = await generateJson(input, agentPlanJsonSchema, { onAttempt, onThought, signal });
     let parsed = agentPlanSchema.safeParse(result.json);
     let thoughts = result.thoughts;
     let model = result.model;
@@ -170,7 +172,7 @@ export async function runAgent(
           .map((i) => `${i.path.join(".")}: ${i.message}`)
           .join("; ")}). Answer again with valid JSON only.`,
         agentPlanJsonSchema,
-        { onThought },
+        { onThought, signal },
       );
       parsed = agentPlanSchema.safeParse(repair.json);
       thoughts = [...thoughts, ...repair.thoughts];
@@ -198,6 +200,8 @@ export async function runAgent(
       warnings: [...warnings, ...issues], error: null,
     };
   } catch (e) {
+    // A cancel is not a failure: no rule fallback, no proposal.
+    if (e instanceof CancelledError || signal?.aborted) throw new CancelledError();
     const reason = e instanceof Error ? e.message : String(e);
     console.error("[agent] falling back to rules:", reason);
     progress({ type: "step", key: "model", state: "warn", label: `Gemini unavailable (${shortReason(reason)}), so I used my basic rules` });

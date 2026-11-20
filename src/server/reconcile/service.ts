@@ -8,6 +8,7 @@ import { getRole, HttpError } from "../access";
 import { sql } from "../db";
 import { getUpload } from "../uploads";
 import { runAgent } from "./agent";
+import { CancelledError, watchCancel } from "./cancel";
 import { loadContext } from "./context";
 import { CsvError, parseShowtimeCsv } from "./csv";
 import type { ChangeDraft } from "./plan";
@@ -46,8 +47,20 @@ async function setStatus(uploadId: string, status: string, message: string, extr
   await event(uploadId, "status", { status, message });
 }
 
-async function saveProposal(uploadId: string, drafts: ChangeDraft[]) {
+/**
+ * Store the proposal and move the upload to pending_review in one transaction.
+ * The row lock serializes with a concurrent cancel: if the reviewer cancelled
+ * first, nothing is written (a retry keeps its previous proposal intact).
+ */
+async function saveProposal(
+  uploadId: string,
+  drafts: ChangeDraft[],
+  meta: { summary: string; warnings: string[]; model: string | null },
+) {
   await sql.begin(async (tx) => {
+    const [u] = await tx<{ status: string }[]>`
+      select status from hv_theater.csv_uploads where id = ${uploadId} for update`;
+    if (u?.status !== "analyzing") throw new CancelledError();
     await tx`delete from hv_theater.upload_changes where upload_id = ${uploadId}`;
     // Display order: actionable first, then informational.
     const order = ["add", "update", "reactivate", "archive", "duplicate", "unchanged", "invalid"];
@@ -74,7 +87,9 @@ async function saveProposal(uploadId: string, drafts: ChangeDraft[]) {
     await tx`
       update hv_theater.csv_uploads set
         adds_count = ${n("add")}, updates_count = ${n("update") + n("reactivate")},
-        archives_count = ${n("archive")}, applied_count = 0, failed_count = 0, updated_at = now()
+        archives_count = ${n("archive")}, applied_count = 0, failed_count = 0,
+        summary = ${meta.summary}, warnings = ${meta.warnings}, model = ${meta.model},
+        status = 'pending_review', error = null, analyzed_at = now(), updated_at = now()
       where id = ${uploadId}`;
   });
 }
@@ -88,6 +103,23 @@ async function analyze(
   progress: Progress = () => undefined,
 ) {
   await setStatus(uploadId, "analyzing", feedback ? "Re-analyzing with reviewer feedback" : "Parsing and matching rows");
+  const watch = watchCancel(uploadId);
+  try {
+    await analyzeRows(uploadId, theaterId, csv, actorId, feedback, progress, watch);
+  } finally {
+    watch.stop();
+  }
+}
+
+async function analyzeRows(
+  uploadId: string,
+  theaterId: string,
+  csv: string,
+  actorId: string,
+  feedback: string | undefined,
+  progress: Progress,
+  watch: ReturnType<typeof watchCancel>,
+) {
   progress({ type: "step", key: "parsed", state: "active", label: "Reading the file…" });
   let parsed;
   try {
@@ -111,6 +143,7 @@ async function analyze(
   try {
     progress({ type: "step", key: "context", state: "active", label: "Pulling up the stored schedule…" });
     const ctx = await loadContext(theaterId, parsed.rows);
+    watch.check();
     const days = ctx.window.days.map((d) => new Date(`${d}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }));
     progress({
       type: "step",
@@ -131,15 +164,13 @@ async function analyze(
       parsed.invalid,
       feedback ? { text: feedback, previous } : undefined,
       progress,
+      watch.signal,
     );
+    watch.check();
     if (parsed.ignoredColumns.length) outcome.warnings.push(`Ignored extra columns: ${parsed.ignoredColumns.join(", ")}.`);
 
     progress({ type: "step", key: "saved", state: "active", label: "Writing up the proposal…" });
-    await saveProposal(uploadId, outcome.drafts);
-    await sql`
-      update hv_theater.csv_uploads set
-        summary = ${outcome.summary}, warnings = ${outcome.warnings}, model = ${outcome.model}, updated_at = now()
-      where id = ${uploadId}`;
+    await saveProposal(uploadId, outcome.drafts, outcome);
     await event(uploadId, "note", {
       message: outcome.message,
       actorId,
@@ -152,9 +183,17 @@ async function analyze(
       },
     });
     if (outcome.error) await event(uploadId, "error", { message: `AI unavailable, used rules: ${outcome.error}` });
-    await setStatus(uploadId, "pending_review", `${outcome.drafts.length} items proposed (${outcome.source})`);
+    await event(uploadId, "status", {
+      status: "pending_review",
+      message: `${outcome.drafts.length} items proposed (${outcome.source})`,
+    });
     progress({ type: "step", key: "saved", state: "done", label: "Proposal ready for your review" });
   } catch (e) {
+    if (e instanceof CancelledError || watch.signal.aborted) {
+      // The cancel endpoint already recorded the status and event.
+      progress({ type: "step", key: "saved", state: "warn", label: "Cancelled" });
+      return;
+    }
     const msg = e instanceof Error ? e.message : "Analysis failed";
     progress({ type: "step", key: "saved", state: "warn", label: `Something went wrong: ${msg}` });
     console.error("[upload] analysis failed", e);
@@ -181,6 +220,7 @@ export async function createUpload(
     values (${theaterId}, ${userId}, ${fileName.slice(0, 200)}, ${Buffer.byteLength(csv)}, ${sha}, ${csv})
     returning id`;
   await event(u!.id, "status", { status: "received", message: `Received ${fileName}`, actorId: userId });
+  progress({ type: "started", uploadId: u!.id });
   const kb = Math.max(1, Math.round(Buffer.byteLength(csv) / 1024));
   progress({ type: "step", key: "received", state: "done", label: `Got ${fileName} (${kb} KB)` });
   await analyze(u!.id, theaterId, csv, userId, undefined, progress);
@@ -207,6 +247,7 @@ export async function retryUpload(
   if (u.status !== "pending_review") throw new HttpError(409, `Upload is ${u.status}, not awaiting review`);
   if (!u.raw_csv) throw new HttpError(409, "Original CSV is not stored for this upload");
   await event(uploadId, "feedback", { message: feedback, actorId: userId });
+  progress({ type: "started", uploadId });
   progress({ type: "step", key: "received", state: "done", label: "Got your feedback" });
   await analyze(uploadId, u.theater_id, u.raw_csv, userId, feedback, progress);
   return getUpload(userId, uploadId);
@@ -219,6 +260,32 @@ export async function discardUpload(userId: string, uploadId: string) {
   }
   await setStatus(uploadId, "discarded", "Reviewer cancelled");
   return getUpload(userId, uploadId);
+}
+
+/**
+ * Cancel an analysis in progress. A first-time upload becomes discarded; a
+ * retry goes back to pending_review with its previous proposal. The running
+ * job notices within ~2s, aborts its Gemini request and writes nothing.
+ * Idempotent: if the analysis already finished, nothing changes.
+ */
+export async function cancelAnalysis(userId: string, uploadId: string) {
+  await loadForAction(userId, uploadId);
+  const [row] = await sql<{ status: string }[]>`
+    update hv_theater.csv_uploads set
+      status = (case when analyzed_at is null then 'discarded' else 'pending_review' end)::hv_theater.upload_status,
+      completed_at = case when analyzed_at is null then now() else completed_at end,
+      updated_at = now()
+    where id = ${uploadId} and status in ('received', 'analyzing')
+    returning status`;
+  if (row) {
+    await event(uploadId, "status", {
+      status: row.status,
+      actorId: userId,
+      message:
+        row.status === "discarded" ? "Cancelled during analysis" : "Re-analysis cancelled; kept the previous proposal",
+    });
+  }
+  return { cancelled: Boolean(row), upload: await getUpload(userId, uploadId) };
 }
 
 // ------------------------------------------------------------------ apply

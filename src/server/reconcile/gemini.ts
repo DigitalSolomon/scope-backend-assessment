@@ -1,6 +1,7 @@
 import "server-only";
 
 import { env } from "~/env";
+import { CancelledError } from "./cancel";
 
 /**
  * Minimal client for the Gemini Interactions API
@@ -197,12 +198,15 @@ export interface GenerateOptions {
   onThought?: (text: string) => void;
   /** Called when a model attempt starts (including retries and fallbacks). */
   onAttempt?: (info: { model: string; attempt: number; reason?: string }) => void;
+  /** Aborts the in-flight request (reviewer cancelled); throws CancelledError. */
+  signal?: AbortSignal;
 }
 
 /** Generate JSON for `schema`, streaming thoughts. Retries once, then falls back to a lighter model on rate limits. */
 export async function generateJson(input: string, schema: object, opts: GenerateOptions = {}): Promise<GeminiResult> {
   if (!env.GEMINI_API_KEY) throw new GeminiError("GEMINI_API_KEY is not set", null, false);
-  const signal = AbortSignal.timeout(opts.timeoutMs ?? 100_000);
+  const timeout = AbortSignal.timeout(opts.timeoutMs ?? 100_000);
+  const signal = opts.signal ? AbortSignal.any([timeout, opts.signal]) : timeout;
   const models = [...new Set([env.GEMINI_MODEL, FALLBACK_MODEL])];
   let last: unknown;
   let reason: string | undefined;
@@ -213,12 +217,14 @@ export async function generateJson(input: string, schema: object, opts: Generate
         return await callOnce(model, input, schema, signal, opts.onThought);
       } catch (e) {
         last = e;
+        if (opts.signal?.aborted) throw new CancelledError();
         if (signal.aborted) throw new GeminiError("Timed out waiting for the model", null, false);
         reason = e instanceof GeminiError && e.status === 429 ? "rate limited" : e instanceof Error ? e.message : "error";
         const retryable = e instanceof GeminiError ? e.retryable : true;
         if (!retryable) break; // try the next model (e.g. unknown model id) or give up
         if (e instanceof GeminiError && e.status === 429) break; // rate limited: switch model now
         await new Promise((r) => setTimeout(r, 800));
+        if (opts.signal?.aborted) throw new CancelledError();
       }
     }
   }

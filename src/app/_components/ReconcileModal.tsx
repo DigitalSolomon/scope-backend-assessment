@@ -17,6 +17,8 @@ interface ReconcileModalProps {
   /** Live, streamed progress while ScopeBot works. */
   progress: ReconcileProgress;
   onCancel: () => void;
+  /** Stop an analysis in progress (thinking phase). */
+  onStopAnalysis: () => void;
   onConfirm: (rejectedChangeIds: string[]) => void;
   onRequestFeedback: () => void;
   onRetry: (feedback: string) => void;
@@ -214,14 +216,28 @@ export function ReconcileModal(props: ReconcileModalProps) {
 
   // ----------------------------------------------------------- live analysis
   if (phase === "thinking") {
+    // A fresh upload has no record on screen yet; a retry re-analyzes the one shown.
+    const retrying = upload !== null;
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2 sm:p-4">
         <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-gray-900 p-5 shadow-2xl sm:p-6">
           <ThinkingPanel
             progress={props.progress}
             fallbackLine={line}
-            title={isRetry ? "Taking another look with your feedback" : `Analyzing ${fileName}`}
+            title={retrying ? "Taking another look with your feedback" : `Analyzing ${fileName}`}
           />
+          <div className="mt-5 flex items-center justify-end gap-3 border-t border-gray-800 pt-4">
+            <span className="text-xs text-gray-500">
+              {retrying ? "Cancelling keeps my previous proposal." : "Nothing changes in your schedule until you confirm."}
+            </span>
+            <button
+              type="button"
+              onClick={props.onStopAnalysis}
+              className="rounded-lg border border-gray-600 px-4 py-2 text-sm text-gray-200 transition hover:border-red-400 hover:text-red-300"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       </div>
     );
