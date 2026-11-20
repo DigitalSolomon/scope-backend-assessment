@@ -56,6 +56,25 @@ export default function Home() {
   const [sortField, setSortField] = useState<ShowtimeSortField>("startTime");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [explain, setExplain] = useState(false);
+  // The Query inspector is a developer aid: hidden unless asked for, remembered per browser.
+  const [showInspector, setShowInspector] = useState(false);
+  useEffect(() => {
+    try {
+      setShowInspector(window.localStorage.getItem("showQueryInspector") === "1");
+    } catch {
+      // storage unavailable (private window): stay hidden
+    }
+  }, []);
+  const toggleInspector = () => {
+    const next = !showInspector;
+    setShowInspector(next);
+    if (!next) setExplain(false); // no EXPLAIN work while nobody is looking
+    try {
+      window.localStorage.setItem("showQueryInspector", next ? "1" : "0");
+    } catch {
+      // not remembered; fine
+    }
+  };
 
   const [rows, setRows] = useState<ApiShowtime[]>([]);
   const [total, setTotal] = useState<number | null>(null);
@@ -560,7 +579,17 @@ export default function Home() {
           </div>
         )}
 
-        <QueryInspector explain={explain} onExplainChange={setExplain} />
+        {showInspector && <QueryInspector explain={explain} onExplainChange={setExplain} />}
+        <div className="mt-8 flex justify-end">
+          <button
+            type="button"
+            onClick={toggleInspector}
+            aria-expanded={showInspector}
+            className="text-[11px] text-gray-600 underline-offset-2 transition hover:text-gray-400 hover:underline"
+          >
+            {showInspector ? "Hide developer tools" : "Developer tools"}
+          </button>
+        </div>
 
         <ReconcileModal
           open={reconcile.open}

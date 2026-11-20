@@ -22,6 +22,9 @@ export function TheaterPicker({ userId, value, onChange, disabled }: TheaterPick
   const [query, setQuery] = useState("");
   const [options, setOptions] = useState<ApiTheater[]>([]);
   const [loading, setLoading] = useState(false);
+  // A failed request is not "no matching theaters": say so and offer a retry.
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const debounced = useDebounce(query, 200);
   const boxRef = useRef<HTMLDivElement>(null);
 
@@ -29,16 +32,21 @@ export function TheaterPicker({ userId, value, onChange, disabled }: TheaterPick
     if (!open || !userId) return;
     const controller = new AbortController();
     setLoading(true);
+    setFailed(false);
     const qs = new URLSearchParams({ limit: "25", ...(debounced ? { q: debounced } : {}) });
     api<{ theaters: ApiTheater[] }>(`/api/theaters?${qs.toString()}`, {
       userId,
       signal: controller.signal,
     })
       .then(({ theaters }) => setOptions(theaters))
-      .catch(() => undefined)
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setOptions([]);
+        setFailed(true);
+      })
       .finally(() => !controller.signal.aborted && setLoading(false));
     return () => controller.abort();
-  }, [open, debounced, userId]);
+  }, [open, debounced, userId, attempt]);
 
   useEffect(() => {
     const close = (e: MouseEvent) => {
@@ -59,7 +67,11 @@ export function TheaterPicker({ userId, value, onChange, disabled }: TheaterPick
       <button
         type="button"
         disabled={disabled}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          // Opening shows "Searching…" at once, not "No matching theaters" for a frame.
+          if (!open) setLoading(true);
+          setOpen((o) => !o);
+        }}
         className="flex w-full items-center justify-between rounded-lg border border-gray-600 bg-gray-800 px-3 py-2 text-left text-sm text-white focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
       >
         <span className="truncate">
@@ -115,8 +127,20 @@ export function TheaterPicker({ userId, value, onChange, disabled }: TheaterPick
                 </button>
               </li>
             ))}
-            {!loading && options.length === 0 && (
-              <li className="px-3 py-2 text-gray-500">No matching theaters</li>
+            {!loading && failed && (
+              <li className="flex items-center justify-between gap-2 px-3 py-2 text-amber-300">
+                <span>Couldn&apos;t load theaters.</span>
+                <button
+                  type="button"
+                  onClick={() => setAttempt((n) => n + 1)}
+                  className="rounded border border-amber-700 px-2 py-0.5 text-xs text-amber-200 hover:bg-amber-950"
+                >
+                  Retry
+                </button>
+              </li>
+            )}
+            {!loading && !failed && options.length === 0 && (
+              <li className="px-3 py-2 text-gray-500">{debounced ? "No matching theaters" : "You don't belong to any theaters"}</li>
             )}
             {loading && <li className="px-3 py-2 text-gray-500">Searching…</li>}
           </ul>
