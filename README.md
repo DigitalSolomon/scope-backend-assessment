@@ -1,16 +1,14 @@
 # Theater Showtimes Manager
 
-A theater management console backed by Postgres: per-theater roles, indexed search and filtering that stays fast at hundreds of thousands of showtimes, and a schema that records every CSV upload ("patching event") and the changes it proposes.
+A theater management console backed by Postgres: per-theater roles, indexed search and filtering that stays fast at hundreds of thousands of showtimes, and **ScopeBot**, an AI agent that reconciles partner CSV uploads against the stored schedule and proposes changes for review. Every upload ("patching event") and its outcome is recorded.
 
-**Stack:** Next.js 15 (App Router) route handlers in TypeScript · Postgres on Supabase via [`postgres`](https://github.com/porsager/postgres) · Vercel.
-
-> Status: the database layer, search API and UI are live. CSV upload still opens the original mock preview; the AI-powered reconciliation flow replaces it next.
+**Stack:** Next.js 15 (App Router) route handlers in TypeScript · Postgres on Supabase via [`postgres`](https://github.com/porsager/postgres) · Gemini (Interactions API) · Vercel.
 
 ## Setup
 
 ```bash
 npm install
-cp .env.example .env        # set DATABASE_URL (Supabase transaction pooler, see below)
+cp .env.example .env        # set DATABASE_URL (Supabase transaction pooler, see below) and GEMINI_API_KEY
 npm run db:migrate          # create/upgrade the hv_theater schema (idempotent)
 npm run db:seed             # load src/data/assessment-data.ts
 npm run dev                 # http://localhost:3000
@@ -24,6 +22,23 @@ npm run dev                 # http://localhost:3000
 | `db:reset`      | Drops the `hv_theater` schema, then migrates and seeds.                                                                                                                      |
 
 **Connection string.** Use the Supabase _transaction pooler_ (`aws-…pooler.supabase.com:6543`, user `postgres.<project-ref>`). The direct `db.<ref>.supabase.co` host is IPv6-only and unreachable from Vercel. The client disables prepared statements and holds one connection per serverless instance, as the pooler requires (`src/server/db.ts`).
+
+**Gemini.** `GEMINI_API_KEY` is a free key from [Google AI Studio](https://aistudio.google.com/apikey). It is optional: without it ScopeBot runs in a clearly labelled basic mode using deterministic matching rules. `GEMINI_MODEL` (default `gemini-3.8-flash`) and `GEMINI_THINKING_LEVEL` (default `medium`) are optional too.
+
+## ScopeBot: AI CSV reconciliation
+
+An admin picks a theater and uploads a partner CSV. ScopeBot compares it with the stored schedule and proposes changes; **nothing is applied until the reviewer confirms.**
+
+1. **Record and parse.** The upload is stored first (so failed attempts are visible), then parsed: RFC 4180, forgiving headers (case, spaces, BOM), unicode cleanup, invalid rows reported with reasons.
+2. **Gather context in code.** Stored showtimes for the file's days, the theater's auditoriums, and up to 5 candidate matches per row (same start time, or similar title nearby). Facts the model shouldn't have to derive are precomputed: whether a row is older than the stored record (stale), and how much of each day the file covers (whether a missing showtime means "removed").
+3. **The agent decides.** Gemini returns a JSON-schema-constrained change set: for each row `add` / `update` / `reactivate` / `unchanged` / `duplicate`, plus `archive` for stored showtimes the file dropped, each with a plain-English explanation and confidence. It resolves fuzzy titles ("Spider Man - Homecoming") and auditoriums ("Aud 1", "Auditorium Two") to existing records. CSV cells are treated as data, never instructions.
+4. **The server verifies.** Every referenced ID, row coverage and field diff is checked against the database and recomputed in code; anything invalid is replaced with the rule-based decision for that row and noted. If Gemini is unavailable, the whole plan falls back to the rules, labelled as such.
+5. **Review.** ScopeBot presents the proposal in its own voice. The reviewer can untick individual changes, **Confirm**, **Cancel**, or **Reject with feedback** ("don't archive the late show"), which re-runs the agent with the notes and its previous proposal.
+6. **Apply.** One transaction, one savepoint per change, optimistic version checks: a change that conflicts is recorded as failed and the rest still apply (`partially_applied`).
+
+**Live progress.** Analysis streams as newline-delimited JSON: pipeline steps, Gemini's thought summaries as they arrive, and a 3 s heartbeat, so the UI always shows something is happening (typically 20–40 s per file). **Cancel** works mid-thinking: an explicit `cancel` call marks the upload in the database, the job notices within ~2 s and aborts its model request without falling back or saving. Cancelling a retry keeps the previous proposal.
+
+The character is a transparent video (VP9-alpha WebM for Chrome/Firefox, HEVC-alpha MOV for Safari/iOS) with idle and thinking loops; the white background was removed offline (`scripts/scopebot/`).
 
 ## Key decisions
 
@@ -72,6 +87,11 @@ All routes take the acting user in the `x-user-id` header.
 | `PATCH /api/showtimes/:id`                            | Admin at that theater: `status` and/or `movieStatus`.                                                                                                                                                                                |
 | `POST /api/theaters/:id/clear-schedule`               | Admin: archive every showtime at the theater.                                                                                                                                                                                        |
 | `GET /api/uploads?theaterId=`, `GET /api/uploads/:id` | Upload history; one upload with its changes and event log.                                                                                                                                                                           |
+| `POST /api/uploads`                                   | Admin: `{ theaterId, fileName, csv }`. Records the upload and runs ScopeBot. With `Accept: application/x-ndjson`, streams progress and ends with the proposal.                                                                       |
+| `POST /api/uploads/:id/retry`                         | Reject with feedback: `{ feedback }`. Re-runs the agent (streams like above).                                                                                                                                                        |
+| `POST /api/uploads/:id/cancel`                        | Stop an analysis in progress.                                                                                                                                                                                                        |
+| `POST /api/uploads/:id/apply`                         | Apply the proposal, minus `{ rejectedChangeIds }`.                                                                                                                                                                                   |
+| `POST /api/uploads/:id/discard`                       | Reviewer cancelled; nothing is applied.                                                                                                                                                                                              |
 
 The UI's **Query inspector** panel lists every API call with its timing. With **Explain** ticked, it also shows which indexes each search used.
 
@@ -128,8 +148,10 @@ The full synthetic dataset took ~185 MB with indexes. The shared database now ho
 ```
 db/schema.sql            schema, indexes, rationale
 scripts/db.mjs           migrate / seed / seed-scale / reset
-src/server/              db client, access control, search, uploads (server-only)
+src/server/              db client, access control, search, uploads, streaming (server-only)
+src/server/reconcile/    ScopeBot: CSV parsing, context, Gemini client, agent prompt, verification, apply
 src/app/api/             route handlers
-src/app/_components/     table, filters, theater picker, query inspector, preview modal
+src/app/_components/     table, filters, theater picker, query inspector, ScopeBot, review modal
+public/scopebot/         transparent character videos
 src/lib/normalize.ts     title/auditorium identity keys (unicode dashes, case, punctuation)
 ```
