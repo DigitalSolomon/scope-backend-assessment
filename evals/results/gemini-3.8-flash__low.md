@@ -1,6 +1,6 @@
 # ScopeBot evals: gemini-3.8-flash, low thinking
 
-Run 2026-11-20 08:14 UTC · 26 cases · **26/26 passed (100%)** · median 8s, slowest 38s per case · 3 case(s) re-run individually afterwards (marked ↻)
+Run 2026-11-20 08:14 UTC · 28 cases · **28/28 passed (100%)** · median 8s, slowest 38s per case · 5 case(s) re-run individually afterwards (marked ↻)
 
 | Case | Protects | Passed | Median |
 | --- | --- | --- | --- |
@@ -30,3 +30,5 @@ Run 2026-11-20 08:14 UTC · 26 cases · **26/26 passed (100%)** · median 8s, sl
 | Good rows mixed with a broken one | Invalid rows are skipped with a reason; the rest proceed | 1/1 | 5s |
 | A semicolon-delimited export | Other delimiters are read end to end | 1/1 | 9s |
 | A 40-row file for two new days | Larger files finish with the model, inside the time budget | 1/1 | 38s |
+| A showing is renamed to a sequel title ↻ | A title that differs only in its number is a title change, not a new film or a typo | 1/1 | 8s |
+| Feedback: add it as a new movie instead of renaming ↻ | After feedback, an add in an occupied slot stays an add and is flagged as a double booking | 1/1 | 11s |

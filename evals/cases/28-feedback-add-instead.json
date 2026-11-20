@@ -1,0 +1,25 @@
+{
+  "title": "Feedback: add it as a new movie instead of renaming",
+  "checks": "After feedback, an add in an occupied slot stays an add and is flagged as a double booking",
+  "rows": [
+    "Downtown Cinema 7,Inside Out 3,Auditorium 2,2025-03-15T17:30:00Z,2025-03-15T19:20:00Z,EN,3D,PG,2025-03-16T09:00:00Z"
+  ],
+  "feedback": "Don't rename it. Add Inside Out 3 as a new movie instead and leave Inside Out 2 alone.",
+  "expect": {
+    "counts": {
+      "add": 1,
+      "update": 0,
+      "archive": 0
+    },
+    "changes": [
+      {
+        "kind": "add",
+        "title": "Inside Out 3",
+        "room": "Auditorium 2"
+      }
+    ],
+    "warnings": [
+      "overlaps Inside Out 2"
+    ]
+  }
+}

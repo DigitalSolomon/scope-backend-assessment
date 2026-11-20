@@ -117,8 +117,18 @@ export function sameTheater(fileName: string, theaterName: string): boolean {
   return small.size > 0 && [...small].every((t) => big.has(t));
 }
 
-/** Same film, allowing spelling noise ("Spider Man - Homecoming"). */
-export const sameFilm = (a: string, b: string) => normalizeKey(a) === normalizeKey(b) || similarity(a, b) >= 0.9;
+const numbersIn = (v: string) => tokens(v).filter((t) => /^\d+$/.test(t)).sort().join(",");
+
+/**
+ * Titles whose numbers differ are different titles, however close the rest
+ * is: "Inside Out 3" is not a spelling of "Inside Out 2". ("Two", "II" and
+ * "2" count as the same number.)
+ */
+export const differsByNumber = (a: string, b: string) => numbersIn(a) !== numbersIn(b);
+
+/** Same film, allowing spelling noise ("Spider Man - Homecoming") but not a different number. */
+export const sameFilm = (a: string, b: string) =>
+  normalizeKey(a) === normalizeKey(b) || (!differsByNumber(a, b) && similarity(a, b) >= 0.9);
 
 // ------------------------------------------------------------ loading
 

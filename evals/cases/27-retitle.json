@@ -1,0 +1,23 @@
+{
+  "title": "A showing is renamed to a sequel title",
+  "checks": "A title that differs only in its number is a title change, not a new film or a typo",
+  "rows": [
+    "Downtown Cinema 7,Inside Out 3,Auditorium 2,2025-03-15T17:30:00Z,2025-03-15T19:20:00Z,EN,3D,PG,2025-03-16T09:00:00Z"
+  ],
+  "expect": {
+    "counts": {
+      "update": 1,
+      "add": 0,
+      "archive": 0
+    },
+    "changes": [
+      {
+        "kind": "update",
+        "title": "Inside Out 3",
+        "sets": {
+          "movieTitle": "Inside Out 3"
+        }
+      }
+    ]
+  }
+}

@@ -5,7 +5,7 @@ import { normalizeKey } from "~/lib/normalize";
 import type { ChangeKind, FieldDiff } from "~/types/assessment";
 import type { CsvRow, InvalidRow } from "./csv";
 import { clockTimesIn, formatClock, formatDay, formatWhen } from "~/lib/format";
-import { sameFilm, sameRoom, similarity, tokens, type ReconcileContext, type StoredShowtime } from "./context";
+import { differsByNumber, sameFilm, sameRoom, similarity, tokens, type ReconcileContext, type StoredShowtime } from "./context";
 
 // ------------------------------------------------------------------ the change set
 //
@@ -144,6 +144,8 @@ const FIELD_NAMES: Record<string, string> = {
 
 /** A same-film, same-room row within this window of a stored showtime is that showtime, rescheduled. */
 export const SHIFT_WINDOW_MS = 90 * 60_000;
+/** At the same start time in the same room, a title at least this similar is the stored showing, retitled. */
+export const RETITLE_SIMILARITY = 0.75;
 /** Missing showtimes are suggested for archiving only on days where the file accounts for at least this share. */
 export const ARCHIVE_COVERAGE = 0.5;
 /** Shorter overlaps are normal turnaround in the sample data (trailers, cleaning). */
@@ -187,7 +189,8 @@ export interface MaterializeOptions {
   /**
    * After reviewer feedback the model's choices are deliberate, so they are
    * honored: "unchanged" keeps a showtime as it is (even archived), "update"
-   * applies even to a stale row, and its archive list is used and pre-selected.
+   * applies even to a stale row, "add" stays a new showing even in an
+   * occupied slot, and its archive list is used and pre-selected.
    * On a first pass the server decides those from facts instead.
    */
   honorDecisions?: boolean;
@@ -274,7 +277,7 @@ export function materialize(
         : `Brings back the ${s.status} ${s.movieTitle} showing.`;
     } else {
       const said = explanation.toLowerCase();
-      const unmentioned = diffs.filter((x) => ["language", "format"].includes(x.field) && !said.includes(x.newValue.toLowerCase()));
+      const unmentioned = diffs.filter((x) => ["language", "format", "movieTitle"].includes(x.field) && !said.includes(x.newValue.toLowerCase()));
       if (unmentioned.length) extra.push(` (Also changes ${describeDiffs(unmentioned)}.)`);
     }
     const kind: ChangeKind = s.status !== "active" ? "reactivate" : "update";
@@ -371,35 +374,57 @@ export function materialize(
     // update / unchanged: the model names the showtime, the server decides what changes.
     const s = ctx.storedById.get(d.showtimeId!)!;
     claimed.set(s.id, row.row);
+    // The model may keep the stored title, reading the file's as a spelling of
+    // it. A different number is a different title, so that is a title change.
+    if (!honor && sameText(base.movieTitle, s.movieTitle) && differsByNumber(row.movieTitle, s.movieTitle)) {
+      base.movieTitle = row.movieTitle;
+    }
     const draft = matched(s, row, base, common, d.action);
     drafts.push(draft);
     resolvedRow.set(row.row, draft);
   }
 
-  // Reschedules: a "new" showing of the same film in the same room, close in
-  // time to an active stored showtime nothing else matched, is that showtime
-  // moved (one update), not an add plus an archive.
-  for (const draft of drafts) {
+  // A "new" showing that is really an existing one, changed. A room shows one
+  // film at a time, so an add is folded into an active stored showtime that
+  // nothing else matched when it is either:
+  //  - a reschedule: the same film in the same room, up to 90 minutes away; or
+  //  - a retitle: the same room and start time, with a similar title
+  //    ("Inside Out 3" where "Inside Out 2" is stored).
+  // Either way the result is one update, not an add plus an archive.
+  // Not after reviewer feedback: an "add" is then a deliberate choice ("add it
+  // as a new movie instead"), so it stays an add and any double booking is
+  // flagged below for the reviewer.
+  for (const draft of honor ? [] : drafts) {
     if (draft.kind !== "add") continue;
     const row = rowByNumber.get(draft.csvRows[0]!);
     if (!row) continue;
     const t = Date.parse(draft.startTime);
+    const gap = (s: StoredShowtime) => Math.abs(Date.parse(s.startTime) - t);
     const near = ctx.stored
       .filter(
         (s) =>
-          s.status === "active" && !claimed.has(s.id) &&
-          Math.abs(Date.parse(s.startTime) - t) <= SHIFT_WINDOW_MS &&
-          sameFilm(s.movieTitle, draft.movieTitle) && sameRoom(s.auditorium, draft.auditorium),
+          s.status === "active" && !claimed.has(s.id) && sameRoom(s.auditorium, draft.auditorium) &&
+          (gap(s) === 0
+            ? similarity(s.movieTitle, draft.movieTitle) >= RETITLE_SIMILARITY
+            : gap(s) <= SHIFT_WINDOW_MS && sameFilm(s.movieTitle, draft.movieTitle)),
       )
-      .sort((a, b) => Math.abs(Date.parse(a.startTime) - t) - Math.abs(Date.parse(b.startTime) - t))[0];
+      .sort((a, b) => gap(a) - gap(b))[0];
     if (!near) continue;
     claimed.set(near.id, row.row);
+    const retitled = gap(near) === 0 && !sameFilm(near.movieTitle, draft.movieTitle);
     const moved = matched(
       near, row,
-      { movieTitle: near.movieTitle, auditorium: near.auditorium, startTime: draft.startTime, endTime: draft.endTime, language: draft.language, format: draft.format, rating: draft.rating },
+      {
+        movieTitle: retitled ? draft.movieTitle : near.movieTitle, auditorium: near.auditorium,
+        startTime: draft.startTime, endTime: draft.endTime, language: draft.language, format: draft.format, rating: draft.rating,
+      },
       {
         csvRows: draft.csvRows, confidence: Math.min(draft.confidence, 0.85), source: draft.source,
-        explanation: `Same film in the same room as the stored ${formatClock(near.startTime)} showing, moved to ${formatClock(draft.startTime)}.`,
+        explanation: retitled
+          ? `Same room and start time as the stored ${near.movieTitle} showing; the file names it ${draft.movieTitle}.`
+          : gap(near) === 0
+            ? `Matches the stored ${near.movieTitle} showing at ${formatClock(near.startTime)}.`
+            : `Same film in the same room as the stored ${formatClock(near.startTime)} showing, moved to ${formatClock(draft.startTime)}.`,
       },
       "update",
     );
@@ -548,7 +573,9 @@ export function rulePlan(ctx: ReconcileContext, rows: CsvRow[]): AgentPlan {
       const room = sameRoom(row.auditorium, s.auditorium);
       decisions.push({
         row: row.row, action: "update", showtimeId: s.id, duplicateOfRow: null,
-        title: s.movieTitle, auditorium: room ? s.auditorium : row.auditorium,
+        // A different number is a different title ("Inside Out 3"), not a spelling of the stored one.
+        title: differsByNumber(row.movieTitle, s.movieTitle) ? row.movieTitle : s.movieTitle,
+        auditorium: room ? s.auditorium : row.auditorium,
         confidence: Math.min(0.95, 0.55 + best.titleSimilarity * 0.4),
         explanation: `Same start time as the stored "${s.movieTitle}" (title match ${Math.round(best.titleSimilarity * 100)}%).`,
       });

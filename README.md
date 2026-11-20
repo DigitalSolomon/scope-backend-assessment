@@ -18,15 +18,16 @@ A theater management console with **ScopeBot**, an AI agent that reconciles part
 
 More to try:
 
-| Try this                                           | What should happen                                                              |
-| -------------------------------------------------- | ------------------------------------------------------------------------------- |
-| The **Quick / Thorough** switch next to Upload CSV | Quick answers in about 10 s; Thorough takes about 25 s and shows its reasoning. |
-| **Cancel** while ScopeBot is thinking              | It stops within a couple of seconds and nothing is saved.                       |
-| Refresh the page during a review                   | The proposal is in Upload history with **Resume review**.                       |
-| Edit a sample CSV: move a showing 30 minutes       | One update with the old and new time, not an add plus an archive.               |
-| Upload an image or a spreadsheet instead of a CSV  | A plain message; the attempt is recorded as failed.                             |
-| Switch the user to **Riley Viewer** (an employee)  | Upload and edit controls are disabled; the server refuses writes too.           |
-| Switch to **Sam Scale** (20,000 theaters)          | Search, sort and **Load more** stay fast; open **Query inspector** to see why.  |
+| Try this                                           | What should happen                                                                                                                                         |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The **Quick / Thorough** switch next to Upload CSV | Quick answers in about 10 s; Thorough takes about 25 s and shows its reasoning.                                                                            |
+| **Cancel** while ScopeBot is thinking              | It stops within a couple of seconds and nothing is saved.                                                                                                  |
+| Refresh the page during a review                   | The proposal is in Upload history with **Resume review**.                                                                                                  |
+| Edit a sample CSV: move a showing 30 minutes       | One update with the old and new time, not an add plus an archive.                                                                                          |
+| Upload `sample-data/rename-inside-out-3.csv`       | One title change (Inside Out 2 → Inside Out 3). Reject it with "add it as a new movie instead" and it becomes a new showing with a double-booking warning. |
+| Upload an image or a spreadsheet instead of a CSV  | A plain message; the attempt is recorded as failed.                                                                                                        |
+| Switch the user to **Riley Viewer** (an employee)  | Upload and edit controls are disabled; the server refuses writes too.                                                                                      |
+| Switch to **Sam Scale** (20,000 theaters)          | Search, sort and **Load more** stay fast; open **Query inspector** to see why.                                                                             |
 
 Confirmed changes are real. `npm run db:seed` puts the sample showtimes back.
 
@@ -62,7 +63,7 @@ npm run dev             # http://localhost:3000
 4. **Code decides the facts** (`src/server/reconcile/plan.ts`), and overrides the model where they disagree:
    - **Field changes** are computed from the database and the file.
    - **Stale rows** (older than the stored showtime) change nothing.
-   - **Reschedules:** the same film in the same room within 90 minutes is one update.
+   - **Reschedules and retitles:** the same film in the same room within 90 minutes, or a similar title in the same room and time slot, is one update.
    - **Missing showtimes** are suggested only when the file covers at least half of that day, and start unticked.
    - **Other theaters' rows** are skipped, **double-booked rooms** are flagged, and a **time quoted** in an explanation must belong to that showtime.
    - If Gemini is unavailable, the same rules produce the whole proposal, labelled as rule-based.
@@ -77,8 +78,8 @@ The switch next to Upload CSV sets how hard Gemini thinks for that upload. Both 
 
 | Switch                 | Gemini thinking level | Evals passed | Typical / slowest | Time allowed per attempt |
 | ---------------------- | --------------------- | ------------ | ----------------- | ------------------------ |
-| **Quick**              | `low`                 | 26 / 26      | 8 s / 38 s        | 35 s + 0.15 s per row    |
-| **Thorough** (default) | `medium`              | 26 / 26      | 20 s / 68 s       | 65 s + 0.25 s per row    |
+| **Quick**              | `low`                 | 28 / 28      | 8 s / 38 s        | 35 s + 0.15 s per row    |
+| **Thorough** (default) | `medium`              | 28 / 28      | 20 s / 68 s       | 65 s + 0.25 s per row    |
 
 `GEMINI_THINKING_LEVEL` sets the default; the switch overrides it per upload. If a call is slow, stalls (30 s of silence) or is rate limited, ScopeBot steps down instead of hanging: the same model at `low`, then `GEMINI_FALLBACK_MODEL`, then the rules. All attempts share a 100 s budget, inside the 120 s function limit, and the review says when a lighter pass produced the proposal.
 
@@ -86,29 +87,29 @@ The switch next to Upload CSV sets how hard Gemini thinks for that upload. Both 
 
 | Suite              | What it covers                                                                                                                                 | Result                          |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| `npm test`         | **78 unit tests:** CSV parsing, title and room matching, every rule in step 4, and the Gemini client's time limits and retries (fake network). | 78 / 78                         |
+| `npm test`         | **85 unit tests:** CSV parsing, title and room matching, every rule in step 4, and the Gemini client's time limits and retries (fake network). | 85 / 85                         |
 | `npm run test:api` | **30 API checks:** who sees what, every write refused for the wrong role, search, filters, paging through every sort, input validation.        | 30 / 30                         |
-| `npm run evals`    | **26 ScopeBot scenarios** through the real pipeline with real Gemini calls, graded automatically.                                              | 26 / 26 Thorough, 26 / 26 Quick |
+| `npm run evals`    | **28 ScopeBot scenarios** through the real pipeline with real Gemini calls, graded automatically.                                              | 28 / 28 Thorough, 28 / 28 Quick |
 
 ### Evals
 
 Unit tests cannot tell whether the model decides well, so the evals do. Each case in [`evals/cases/`](evals/cases) is a CSV plus what a correct proposal must contain. It runs against the sample schedule in `src/data/assessment-data.ts`, so it needs no database, writes nothing and is repeatable.
 
-| The task asks for            | Cases                                                                                                    |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Title and auditorium matches | messy sample file, typos and odd spellings, a room not used before                                       |
-| New records                  | new day, new showing, a different film at an existing start time                                         |
-| Changed records              | room change, 30-minute reschedule, format change, an archived showing returning in another room          |
-| Missing records              | full-day file (suggested, unticked), one-row patch (nothing archived)                                    |
-| Duplicate records            | exact repeats, repeats with a different spelling                                                         |
-| Leaving things alone         | stale file, rating differences, blank optional columns, a show that crosses midnight                     |
-| Bad input                    | another theater's rows, the wrong theater's file, instructions hidden in a cell, broken rows, semicolons |
-| Review with feedback         | keep one archived, drop one change, feedback that tries to override the rules                            |
-| Warnings and timing          | double-booked room flagged, a 40-row file inside the time budget                                         |
+| The task asks for            | Cases                                                                                                                                         |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Title and auditorium matches | messy sample file, typos and odd spellings, a room not used before                                                                            |
+| New records                  | new day, new showing, a different film at an existing start time                                                                              |
+| Changed records              | room change, 30-minute reschedule, format change, a retitle ("Inside Out 2" to "Inside Out 3"), an archived showing returning in another room |
+| Missing records              | full-day file (suggested, unticked), one-row patch (nothing archived)                                                                         |
+| Duplicate records            | exact repeats, repeats with a different spelling                                                                                              |
+| Leaving things alone         | stale file, rating differences, blank optional columns, a show that crosses midnight                                                          |
+| Bad input                    | another theater's rows, the wrong theater's file, instructions hidden in a cell, broken rows, semicolons                                      |
+| Review with feedback         | keep one archived, drop one change, add as a new showing instead of renaming, feedback that tries to override the rules                       |
+| Warnings and timing          | double-booked room flagged, a 40-row file inside the time budget                                                                              |
 
 Every proposal must also be answered by the model (not the fallback), give each row a decision, state a change count that matches, never mention an internal ID, never claim anything was applied, and only quote times that belong to that showtime.
 
-**Results:** [Thorough](evals/results/gemini-3.8-flash__medium.md) 26 / 26 and [Quick](evals/results/gemini-3.8-flash__low.md) 26 / 26, one run per case (the free tier has a daily quota). Models vary between runs; `EVAL_RUNS=3` gives a pass rate per case.
+**Results:** [Thorough](evals/results/gemini-3.8-flash__medium.md) 28 / 28 and [Quick](evals/results/gemini-3.8-flash__low.md) 28 / 28, one run per case (the free tier has a daily quota). Models vary between runs; `EVAL_RUNS=3` gives a pass rate per case.
 
 **What the evals changed.** Quick first scored 24 / 26: it added another theater's rows, and once said "All set" before any review. Both rules lived only in the prompt; they are now enforced in code with unit tests, so they hold at either setting.
 

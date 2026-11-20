@@ -21,6 +21,9 @@ describe("identity keys", () => {
     assert.ok(similarity("Opennheimer", "Oppenheimer") >= 0.75);
     assert.ok(similarity("Inside Out Two", "Inside Out 2") >= 0.9, "number words fold to numerals");
     assert.ok(!sameFilm("Dune: Part Two", "Dune"));
+    // 90% similar by spelling, but a different number is a different film.
+    assert.ok(!sameFilm("Inside Out 3", "Inside Out 2"));
+    assert.ok(sameFilm("Inside Out II", "Inside Out 2"), "II, Two and 2 are the same number");
     assert.ok(!sameFilm("Wonka", "Barbie"));
   });
 

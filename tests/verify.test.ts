@@ -162,6 +162,57 @@ describe("reschedules", () => {
   });
 });
 
+describe("retitles", () => {
+  const rename = csv(line("Inside Out 3", "Auditorium 2", "2025-03-15T17:30:00Z", "2025-03-15T19:20:00Z", { format: "3D", rating: "PG", updated: "2025-03-16T09:00:00Z" }));
+  const expectRename = (m: Materialized) => {
+    assert.deepEqual(kinds(m), { update: 1 });
+    const d = m.drafts[0]!;
+    assert.equal(d.showtimeId, "st-dt-002");
+    assert.deepEqual(diff(d), { movieTitle: "Inside Out 3" });
+    assert.match(d.explanation, /Inside Out 3/);
+    assert.equal(m.notices.length, 0, "not a double booking");
+  };
+
+  it("a title that differs only in its number, at the same time and room, is a title change (rules)", () => {
+    expectRename(rules(rename));
+  });
+
+  it("the same when the model calls it a brand-new film", () => {
+    expectRename(verify(rename, plan([decision(1, "add", { title: "Inside Out 3", auditorium: "Auditorium 2", explanation: "New film." })])));
+  });
+
+  it("the same when the model matches it but keeps the stored title", () => {
+    expectRename(verify(rename, plan([decision(1, "unchanged", { showtimeId: "st-dt-002", title: "Inside Out 2", explanation: "Matches the stored showing." })])));
+  });
+
+  it("after feedback asking for a new showing instead, the add is kept and flagged as a double booking", () => {
+    const asked = plan([decision(1, "add", { title: "Inside Out 3", auditorium: "Auditorium 2", explanation: "Adding it as a new movie, as you asked." })]);
+    const m = verify(rename, asked, { honorDecisions: true });
+    assert.deepEqual(kinds(m), { add: 1 });
+    assert.equal(m.drafts[0]!.showtimeId, null, "the stored Inside Out 2 showing is left alone");
+    assert.match(m.drafts[0]!.explanation, /^Adding it as a new movie, as you asked\. \(Heads up: this overlaps Inside Out 2/);
+    assert.equal(m.notices.length, 1);
+  });
+
+  it("after feedback, a reschedule the reviewer wants as a separate showing also stays an add", () => {
+    const text = csv(line("Spider-Man: Homecoming", "Auditorium 1", "2025-03-15T18:30:00Z", "2025-03-15T20:43:00Z"));
+    const asked = plan([decision(1, "add", { title: "Spider-Man: Homecoming", auditorium: "Auditorium 1", explanation: "A second showing, as requested." })]);
+    assert.deepEqual(kinds(verify(text, asked)), { update: 1 }, "first pass: a reschedule");
+    assert.deepEqual(kinds(verify(text, asked, { honorDecisions: true })), { add: 1 }, "after feedback: the reviewer's call");
+  });
+
+  it("number words are not a rename: 'Inside Out Two' is still Inside Out 2", () => {
+    const m = rules(csv(line("Inside Out Two", "Auditorium 2", "2025-03-15T17:30:00Z", "2025-03-15T19:20:00Z", { format: "3D", rating: "PG" })));
+    assert.deepEqual(kinds(m), { unchanged: 1 });
+  });
+
+  it("an unrelated film in the same slot stays a new showing, flagged as a double booking", () => {
+    const m = rules(csv(line("Barbie", "Auditorium 2", "2025-03-15T17:30:00Z", "2025-03-15T19:20:00Z")));
+    assert.deepEqual(kinds(m), { add: 1 });
+    assert.equal(m.notices.length, 1);
+  });
+});
+
 describe("missing showtimes", () => {
   it("a one-row patch archives nothing", () => {
     const m = rules(csv(line("Dune: Part Two", "Auditorium 2", "2025-03-15T20:00:00Z", "2025-03-15T22:46:00Z", { format: "IMAX" })));

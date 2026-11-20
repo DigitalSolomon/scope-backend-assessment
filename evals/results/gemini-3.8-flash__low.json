@@ -4,14 +4,14 @@
     "model": "gemini-3.8-flash",
     "thinkingLevel": "low",
     "fallbackModel": "gemini-3.5-flash-lite",
-    "cases": 26,
-    "passed": 26,
-    "total": 26,
+    "cases": 28,
+    "passed": 28,
+    "total": 28,
     "passRate": 100,
     "medianSeconds": 8,
     "slowestSeconds": 38,
     "lighterPassRuns": 0,
-    "casesRerunLater": 3
+    "casesRerunLater": 5
   },
   "cases": [
     {
@@ -325,6 +325,30 @@
       "failures": [],
       "ranAt": "2026-11-20T08:14:18.963Z",
       "slowestSeconds": 38
+    },
+    {
+      "id": "27-retitle",
+      "title": "A showing is renamed to a sequel title",
+      "checks": "A title that differs only in its number is a title change, not a new film or a typo",
+      "ranAt": "2026-11-20T09:09:06.549Z",
+      "passed": 1,
+      "runs": 1,
+      "medianSeconds": 8,
+      "slowestSeconds": 8,
+      "lighterPass": 0,
+      "failures": []
+    },
+    {
+      "id": "28-feedback-add-instead",
+      "title": "Feedback: add it as a new movie instead of renaming",
+      "checks": "After feedback, an add in an occupied slot stays an add and is flagged as a double booking",
+      "ranAt": "2026-11-20T09:25:08.087Z",
+      "passed": 1,
+      "runs": 1,
+      "medianSeconds": 11,
+      "slowestSeconds": 11,
+      "lighterPass": 0,
+      "failures": []
     }
   ]
 }

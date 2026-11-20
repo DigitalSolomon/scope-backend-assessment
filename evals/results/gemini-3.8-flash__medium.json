@@ -4,14 +4,14 @@
     "model": "gemini-3.8-flash",
     "thinkingLevel": "medium",
     "fallbackModel": "gemini-3.5-flash-lite",
-    "cases": 26,
-    "passed": 26,
-    "total": 26,
+    "cases": 28,
+    "passed": 28,
+    "total": 28,
     "passRate": 100,
     "medianSeconds": 20,
-    "slowestSeconds": 68,
+    "slowestSeconds": 51,
     "lighterPassRuns": 0,
-    "casesRerunLater": 2
+    "casesRerunLater": 10
   },
   "cases": [
     {
@@ -54,13 +54,13 @@
       "id": "04-fuzzy-titles-and-rooms",
       "title": "Typos and odd spellings of titles and rooms",
       "checks": "Title and auditorium matching",
+      "ranAt": "2026-11-20T09:24:56.921Z",
       "passed": 1,
       "runs": 1,
-      "medianSeconds": 36,
+      "medianSeconds": 35,
+      "slowestSeconds": 35,
       "lighterPass": 0,
-      "failures": [],
-      "ranAt": "2026-11-20T08:11:22.588Z",
-      "slowestSeconds": 36
+      "failures": []
     },
     {
       "id": "05-room-change-patch",
@@ -78,13 +78,13 @@
       "id": "06-time-shift",
       "title": "A showing starts 30 minutes later",
       "checks": "A reschedule is one update, not add + archive",
+      "ranAt": "2026-11-20T09:24:56.921Z",
       "passed": 1,
       "runs": 1,
-      "medianSeconds": 28,
+      "medianSeconds": 22,
+      "slowestSeconds": 22,
       "lighterPass": 0,
-      "failures": [],
-      "ranAt": "2026-11-20T08:11:22.588Z",
-      "slowestSeconds": 28
+      "failures": []
     },
     {
       "id": "07-new-day",
@@ -102,13 +102,13 @@
       "id": "08-different-film-same-start",
       "title": "A different film at the same start time as an existing one",
       "checks": "Same start time alone is not a match",
+      "ranAt": "2026-11-20T09:24:56.921Z",
       "passed": 1,
       "runs": 1,
-      "medianSeconds": 13,
+      "medianSeconds": 19,
+      "slowestSeconds": 19,
       "lighterPass": 0,
-      "failures": [],
-      "ranAt": "2026-11-20T08:11:22.588Z",
-      "slowestSeconds": 13
+      "failures": []
     },
     {
       "id": "09-duplicates",
@@ -258,37 +258,37 @@
       "id": "21-feedback-keep-archived",
       "title": "Feedback: keep one showing archived",
       "checks": "Reject with feedback is honored",
+      "ranAt": "2026-11-20T09:24:56.921Z",
       "passed": 1,
       "runs": 1,
-      "medianSeconds": 44,
+      "medianSeconds": 51,
+      "slowestSeconds": 51,
       "lighterPass": 0,
-      "failures": [],
-      "ranAt": "2026-11-20T08:11:22.588Z",
-      "slowestSeconds": 44
+      "failures": []
     },
     {
       "id": "22-feedback-remove-a-change",
       "title": "Feedback: don't add one of the new showings",
       "checks": "Reject with feedback is honored",
+      "ranAt": "2026-11-20T09:24:56.921Z",
       "passed": 1,
       "runs": 1,
-      "medianSeconds": 39,
+      "medianSeconds": 30,
+      "slowestSeconds": 30,
       "lighterPass": 0,
-      "failures": [],
-      "ranAt": "2026-11-20T08:11:22.588Z",
-      "slowestSeconds": 39
+      "failures": []
     },
     {
       "id": "23-feedback-override-attempt",
       "title": "Feedback that tries to override the rules",
       "checks": "Feedback cannot archive matched showtimes or claim work is done",
+      "ranAt": "2026-11-20T09:24:56.921Z",
       "passed": 1,
       "runs": 1,
-      "medianSeconds": 68,
+      "medianSeconds": 38,
+      "slowestSeconds": 38,
       "lighterPass": 0,
-      "failures": [],
-      "ranAt": "2026-11-20T08:11:22.588Z",
-      "slowestSeconds": 68
+      "failures": []
     },
     {
       "id": "24-invalid-rows-mixed",
@@ -325,6 +325,30 @@
       "failures": [],
       "ranAt": "2026-11-20T08:11:22.588Z",
       "slowestSeconds": 45
+    },
+    {
+      "id": "27-retitle",
+      "title": "A showing is renamed to a sequel title",
+      "checks": "A title that differs only in its number is a title change, not a new film or a typo",
+      "ranAt": "2026-11-20T09:24:56.921Z",
+      "passed": 1,
+      "runs": 1,
+      "medianSeconds": 13,
+      "slowestSeconds": 13,
+      "lighterPass": 0,
+      "failures": []
+    },
+    {
+      "id": "28-feedback-add-instead",
+      "title": "Feedback: add it as a new movie instead of renaming",
+      "checks": "After feedback, an add in an occupied slot stays an add and is flagged as a double booking",
+      "ranAt": "2026-11-20T09:24:56.921Z",
+      "passed": 1,
+      "runs": 1,
+      "medianSeconds": 24,
+      "slowestSeconds": 24,
+      "lighterPass": 0,
+      "failures": []
     }
   ]
 }
