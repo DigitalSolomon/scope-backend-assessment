@@ -1,44 +1,155 @@
 # Theater Showtimes Manager
 
-A theater management console backed by Postgres: per-theater roles, indexed search and filtering that stays fast at hundreds of thousands of showtimes, and **ScopeBot**, an AI agent that reconciles partner CSV uploads against the stored schedule and proposes changes for review. Every upload ("patching event") and its outcome is recorded.
+A theater management console with **ScopeBot**, an AI agent that reconciles partner CSV uploads against the stored schedule. It matches messy titles and rooms, finds new, changed, missing and duplicate showtimes, explains each proposal, and applies nothing until a reviewer confirms. Every upload and its outcome is recorded.
 
-**Stack:** Next.js 15 (App Router) route handlers in TypeScript · Postgres on Supabase via [`postgres`](https://github.com/porsager/postgres) · Gemini (Interactions API) · Vercel.
+**Live:** https://scope-backend-assessment-ebon.vercel.app (no login) · **Stack:** Next.js 15 + TypeScript · Postgres (Supabase) · Gemini · Vercel
 
-## Setup
+## Try it
+
+1. Top right, keep **Avery Admin**. Set **Theater scope** to **Downtown Cinema 7**.
+2. **Upload CSV** → `sample-data/existing.csv`. ScopeBot shows its progress, then a proposal.
+   - Expect 2 changes: the archived Wonka and Oppenheimer showings come back.
+   - The Dune 8 PM row is older than the stored one, so it is left alone and says why.
+3. Review it. Untick a change, **Confirm**, **Cancel**, or **Reject w/ Feedback** (try "Keep Oppenheimer archived").
+4. Upload `sample-data/new-drop.csv`.
+   - Expect 1 new showing (Kung Fu Panda 4), 1 duplicate row ignored, and "Spider Man - Homecoming", "Aud 1", "Auditorium Two" matched to existing records.
+   - If you confirmed step 2, Wonka and Oppenheimer also appear under **Not in This File**, unticked: the file may be a partial update, so archiving them is your call.
+5. Scroll to **Upload history** under the table to see every attempt and reopen any of them.
+
+More to try:
+
+| Try this                                           | What should happen                                                              |
+| -------------------------------------------------- | ------------------------------------------------------------------------------- |
+| The **Quick / Thorough** switch next to Upload CSV | Quick answers in about 10 s; Thorough takes about 25 s and shows its reasoning. |
+| **Cancel** while ScopeBot is thinking              | It stops within a couple of seconds and nothing is saved.                       |
+| Refresh the page during a review                   | The proposal is in Upload history with **Resume review**.                       |
+| Edit a sample CSV: move a showing 30 minutes       | One update with the old and new time, not an add plus an archive.               |
+| Upload an image or a spreadsheet instead of a CSV  | A plain message; the attempt is recorded as failed.                             |
+| Switch the user to **Riley Viewer** (an employee)  | Upload and edit controls are disabled; the server refuses writes too.           |
+| Switch to **Sam Scale** (20,000 theaters)          | Search, sort and **Load more** stay fast; open **Query inspector** to see why.  |
+
+Confirmed changes are real. `npm run db:seed` puts the sample showtimes back.
+
+## Run it locally
 
 ```bash
 npm install
-cp .env.example .env        # set DATABASE_URL (Supabase transaction pooler, see below) and GEMINI_API_KEY
-npm run db:migrate          # create/upgrade the hv_theater schema (idempotent)
-npm run db:seed             # load src/data/assessment-data.ts
-npm run dev                 # http://localhost:3000
+cp .env.example .env    # set DATABASE_URL and GEMINI_API_KEY
+npm run db:migrate      # create or upgrade the schema (safe to re-run)
+npm run db:seed         # load the sample data
+npm run dev             # http://localhost:3000
 ```
 
-| Script          | What it does                                                                                                                                                                 |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `db:migrate`    | Applies `db/schema.sql` and refreshes planner statistics. Safe to re-run.                                                                                                    |
-| `db:seed`       | Upserts the sample theaters, users, memberships, showtimes and an example upload.                                                                                            |
-| `db:seed:scale` | Adds a synthetic dataset for performance testing. Size via `SCALE_THEATERS`, `SCALE_MOVIES`, `SCALE_SHOWTIMES_PER_THEATER`. `-- --remove` deletes it and reclaims the space. |
-| `db:reset`      | Drops the `hv_theater` schema, then migrates and seeds.                                                                                                                      |
+- **`DATABASE_URL`:** the Supabase _transaction pooler_ (`aws-…pooler.supabase.com:6543`, user `postgres.<project-ref>`). The direct host is IPv6-only and unreachable from Vercel.
+- **`GEMINI_API_KEY`:** a free key from [Google AI Studio](https://aistudio.google.com/apikey). It stays on the server. Without it ScopeBot still works, in a labelled rule-based mode.
+- **Optional:** `GEMINI_MODEL`, `GEMINI_THINKING_LEVEL`, `GEMINI_FALLBACK_MODEL` (defaults in `.env.example`).
+- **On Vercel:** set the same variables in the project's environment settings and redeploy.
 
-**Connection string.** Use the Supabase _transaction pooler_ (`aws-…pooler.supabase.com:6543`, user `postgres.<project-ref>`). The direct `db.<ref>.supabase.co` host is IPv6-only and unreachable from Vercel. The client disables prepared statements and holds one connection per serverless instance, as the pooler requires (`src/server/db.ts`).
+| Command                 | What it does                                                                                   |
+| ----------------------- | ---------------------------------------------------------------------------------------------- |
+| `npm test`              | Unit tests. No network or database; under a second.                                            |
+| `npm run test:api`      | Read-only API checks against a running instance (`BASE_URL=https://…` to target a deployment). |
+| `npm run evals`         | ScopeBot graded on real Gemini calls. Needs `GEMINI_API_KEY`.                                  |
+| `npm run check`         | Lint, type check and unit tests.                                                               |
+| `npm run db:reset`      | Drop the schema, then migrate and load the sample data.                                        |
+| `npm run db:seed:scale` | Add the synthetic performance dataset (`-- --remove` deletes it).                              |
 
-**Gemini.** `GEMINI_API_KEY` is a free key from [Google AI Studio](https://aistudio.google.com/apikey). It is optional: without it ScopeBot runs in a clearly labelled basic mode using deterministic matching rules. `GEMINI_MODEL` (default `gemini-3.8-flash`) and `GEMINI_THINKING_LEVEL` (default `medium`) are optional too.
+## How ScopeBot works
 
-## ScopeBot: AI CSV reconciliation
+1. **Record and parse.** The upload is saved first, so failed attempts are visible. The parser accepts comma, semicolon or tab delimiters and forgiving headers, and reports each invalid row with its reason.
+2. **Gather context.** Code loads the stored showtimes for the file's days and up to 5 likely matches per row.
+3. **The model decides identity.** Gemini returns a schema-constrained plan: is each row an existing showtime (which one), a new one or a duplicate, and what are the canonical film and room. It writes one sentence of explanation per decision. CSV cells are data, never instructions.
+4. **Code decides the facts** (`src/server/reconcile/plan.ts`), and overrides the model where they disagree:
+   - **Field changes** are computed from the database and the file.
+   - **Stale rows** (older than the stored showtime) change nothing.
+   - **Reschedules:** the same film in the same room within 90 minutes is one update.
+   - **Missing showtimes** are suggested only when the file covers at least half of that day, and start unticked.
+   - **Other theaters' rows** are skipped, **double-booked rooms** are flagged, and a **time quoted** in an explanation must belong to that showtime.
+   - If Gemini is unavailable, the same rules produce the whole proposal, labelled as rule-based.
+5. **Review.** The reviewer unticks changes, confirms, cancels, or rejects with feedback, which re-runs the model with their notes.
+6. **Apply.** One transaction with a savepoint per change. A change that conflicts is recorded as failed and the rest still apply.
 
-An admin picks a theater and uploads a partner CSV. ScopeBot compares it with the stored schedule and proposes changes; **nothing is applied until the reviewer confirms.**
+Progress streams to the browser as it happens (steps, the model's reasoning, a heartbeat), and analysis can be cancelled at any point.
 
-1. **Record and parse.** The upload is stored first (so failed attempts are visible), then parsed: RFC 4180, forgiving headers (case, spaces, BOM), unicode cleanup, invalid rows reported with reasons.
-2. **Gather context in code.** Stored showtimes for the file's days, the theater's auditoriums, and up to 5 candidate matches per row (same start time, or similar title nearby). Facts the model shouldn't have to derive are precomputed: whether a row is older than the stored record (stale), and how much of each day the file covers (whether a missing showtime means "removed").
-3. **The agent decides.** Gemini returns a JSON-schema-constrained change set: for each row `add` / `update` / `reactivate` / `unchanged` / `duplicate`, plus `archive` for stored showtimes the file dropped, each with a plain-English explanation and confidence. It resolves fuzzy titles ("Spider Man - Homecoming") and auditoriums ("Aud 1", "Auditorium Two") to existing records. CSV cells are treated as data, never instructions.
-4. **The server verifies.** Every referenced ID, row coverage and field diff is checked against the database and recomputed in code; anything invalid is replaced with the rule-based decision for that row and noted. If Gemini is unavailable, the whole plan falls back to the rules, labelled as such.
-5. **Review.** ScopeBot presents the proposal in its own voice. The reviewer can untick individual changes, **Confirm**, **Cancel**, or **Reject with feedback** ("don't archive the late show"), which re-runs the agent with the notes and its previous proposal.
-6. **Apply.** One transaction, one savepoint per change, optimistic version checks: a change that conflicts is recorded as failed and the rest still apply (`partially_applied`).
+### Quick or Thorough
 
-**Live progress.** Analysis streams as newline-delimited JSON: pipeline steps, Gemini's thought summaries as they arrive, and a 3 s heartbeat, so the UI always shows something is happening (typically 20–40 s per file). **Cancel** works mid-thinking: an explicit `cancel` call marks the upload in the database, the job notices within ~2 s and aborts its model request without falling back or saving. Cancelling a retry keeps the previous proposal.
+The switch next to Upload CSV sets how hard Gemini thinks for that upload. Both settings are scored by the evals below.
 
-The character is a transparent video (VP9-alpha WebM for Chrome/Firefox, HEVC-alpha MOV for Safari/iOS) with idle and thinking loops; the white background was removed offline (`scripts/scopebot/`).
+| Switch                 | Gemini thinking level | Evals passed | Typical / slowest | Time allowed per attempt |
+| ---------------------- | --------------------- | ------------ | ----------------- | ------------------------ |
+| **Quick**              | `low`                 | 26 / 26      | 8 s / 38 s        | 35 s + 0.15 s per row    |
+| **Thorough** (default) | `medium`              | 26 / 26      | 20 s / 68 s       | 65 s + 0.25 s per row    |
+
+`GEMINI_THINKING_LEVEL` sets the default; the switch overrides it per upload. If a call is slow, stalls (30 s of silence) or is rate limited, ScopeBot steps down instead of hanging: the same model at `low`, then `GEMINI_FALLBACK_MODEL`, then the rules. All attempts share a 100 s budget, inside the 120 s function limit, and the review says when a lighter pass produced the proposal.
+
+## Testing and evals
+
+| Suite              | What it covers                                                                                                                                 | Result                          |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| `npm test`         | **78 unit tests:** CSV parsing, title and room matching, every rule in step 4, and the Gemini client's time limits and retries (fake network). | 78 / 78                         |
+| `npm run test:api` | **30 API checks:** who sees what, every write refused for the wrong role, search, filters, paging through every sort, input validation.        | 30 / 30                         |
+| `npm run evals`    | **26 ScopeBot scenarios** through the real pipeline with real Gemini calls, graded automatically.                                              | 26 / 26 Thorough, 26 / 26 Quick |
+
+### Evals
+
+Unit tests cannot tell whether the model decides well, so the evals do. Each case in [`evals/cases/`](evals/cases) is a CSV plus what a correct proposal must contain. It runs against the sample schedule in `src/data/assessment-data.ts`, so it needs no database, writes nothing and is repeatable.
+
+| The task asks for            | Cases                                                                                                    |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Title and auditorium matches | messy sample file, typos and odd spellings, a room not used before                                       |
+| New records                  | new day, new showing, a different film at an existing start time                                         |
+| Changed records              | room change, 30-minute reschedule, format change, an archived showing returning in another room          |
+| Missing records              | full-day file (suggested, unticked), one-row patch (nothing archived)                                    |
+| Duplicate records            | exact repeats, repeats with a different spelling                                                         |
+| Leaving things alone         | stale file, rating differences, blank optional columns, a show that crosses midnight                     |
+| Bad input                    | another theater's rows, the wrong theater's file, instructions hidden in a cell, broken rows, semicolons |
+| Review with feedback         | keep one archived, drop one change, feedback that tries to override the rules                            |
+| Warnings and timing          | double-booked room flagged, a 40-row file inside the time budget                                         |
+
+Every proposal must also be answered by the model (not the fallback), give each row a decision, state a change count that matches, never mention an internal ID, never claim anything was applied, and only quote times that belong to that showtime.
+
+**Results:** [Thorough](evals/results/gemini-3.8-flash__medium.md) 26 / 26 and [Quick](evals/results/gemini-3.8-flash__low.md) 26 / 26, one run per case (the free tier has a daily quota). Models vary between runs; `EVAL_RUNS=3` gives a pass rate per case.
+
+**What the evals changed.** Quick first scored 24 / 26: it added another theater's rows, and once said "All set" before any review. Both rules lived only in the prompt; they are now enforced in code with unit tests, so they hold at either setting.
+
+**Editing or adding a case.** A case is one JSON file:
+
+```jsonc
+{
+  "title": "A showing starts 30 minutes later",
+  "checks": "A reschedule is one update, not add + archive",
+  "rows": [
+    "Downtown Cinema 7,Spider-Man: Homecoming,Auditorium 1,2025-03-15T18:30:00Z,2025-03-15T20:43:00Z,EN,2D,PG-13,2025-03-14T12:00:00Z",
+  ],
+  "expect": {
+    "counts": { "update": 1, "add": 0, "archive": 0 },
+    "changes": [
+      {
+        "kind": "update",
+        "title": "Spider-Man: Homecoming",
+        "sets": { "startTime": "2025-03-15T18:30:00.000Z" },
+      },
+    ],
+  },
+}
+```
+
+- **Input:** `rows` (under the standard header), `csv` (full text, line by line) or `csvFile` (a path).
+- **Starting state:** `schedule` patches the sample schedule, e.g. `{ "st-dt-005": { "status": "active" } }`.
+- **Feedback:** `feedback` sends reviewer feedback after the first proposal and grades the second.
+- **Expectations:** `counts`, `changes` and `absent` (by `kind`, `title`, `room`, `sets`, `explains`), `warnings`, `message`, `messageNot`.
+
+```bash
+npm run evals                               # every case; saves the scorecard for this setting
+npm run evals -- shift fuzzy                # only matching cases
+EVAL_RUNS=3 npm run evals                   # each case three times
+GEMINI_THINKING_LEVEL=low npm run evals     # score Quick
+GEMINI_MODEL=gemini-3.5-flash-lite npm run evals
+```
+
+The run exits non-zero below `EVAL_MIN_PASS` (default 0.9), so it can gate a deploy.
+
+**Not automated:** the apply transaction and the UI. Apply was verified with scripted runs (partial apply, a hand edit between proposal and confirm, two proposals adding the same showing, a double-clicked Confirm); the UI was checked by hand in Chrome.
 
 ## Key decisions
 
@@ -48,6 +159,10 @@ The character is a transparent video (VP9-alpha WebM for Chrome/Firefox, HEVC-al
 - **Status at two levels.** `movies.status` (approved / draft / flagged / needs-review) and `showtimes.status` (active / inactive / archived). Seed data that gave one film two statuses keeps the more cautious one.
 - **Business rule in the database.** A partial unique index enforces at most one _active_ showtime per movie + start time per theater.
 - **No auth.** The mock session selector sends `x-user-id`; the server authorizes from memberships.
+- **The model proposes, code verifies.** Anything that is a fact (diffs, staleness, what may be archived) is computed, so a model cannot misreport a change, and results do not hinge on the model or thinking level.
+- **Showtimes display as stored.** The sample times are schedule times (16:00 is a 4 PM matinee), so the table, the review cards and ScopeBot's sentences all show them unconverted, the same in every timezone.
+- **Ratings are not changed by uploads.** A film is shared by every theater, so one theater's file noting a different rating is shown to the reviewer, not written.
+- **A file's own timestamp is kept.** A showtime written from a CSV is stamped with that row's `last_updated`, so the partner's next, newer file is still newer. Manual edits stamp "now".
 
 ## Data model
 
@@ -79,7 +194,7 @@ All routes take the acting user in the `x-user-id` header.
 
 | Route                                                 |                                                                                                                                                                                                                                      |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GET /api/health`                                     | Database connectivity and latency.                                                                                                                                                                                                   |
+| `GET /api/health`                                     | Database connectivity, and whether the AI is connected.                                                                                                                                                                              |
 | `GET /api/users`                                      | Users with theater and admin counts.                                                                                                                                                                                                 |
 | `GET /api/theaters?q=`                                | The user's theaters with their role at each; substring search on name or city.                                                                                                                                                       |
 | `GET /api/showtimes`                                  | Search (`q`), filters (`theaterId`, `status`, `format`, `language`, `rating`, `auditorium`, `movieStatus`, `from`, `to`), sort (`sort`, `order`), keyset pagination (`limit`, `cursor`). `explain=1` adds the Postgres plan summary. |
@@ -87,7 +202,7 @@ All routes take the acting user in the `x-user-id` header.
 | `PATCH /api/showtimes/:id`                            | Admin at that theater: `status` and/or `movieStatus`.                                                                                                                                                                                |
 | `POST /api/theaters/:id/clear-schedule`               | Admin: archive every showtime at the theater.                                                                                                                                                                                        |
 | `GET /api/uploads?theaterId=`, `GET /api/uploads/:id` | Upload history; one upload with its changes and event log.                                                                                                                                                                           |
-| `POST /api/uploads`                                   | Admin: `{ theaterId, fileName, csv }`. Records the upload and runs ScopeBot. With `Accept: application/x-ndjson`, streams progress and ends with the proposal.                                                                       |
+| `POST /api/uploads`                                   | Admin: `{ theaterId, fileName, csv, thinkingLevel? }`. Records the upload and runs ScopeBot. With `Accept: application/x-ndjson`, streams progress and ends with the proposal.                                                       |
 | `POST /api/uploads/:id/retry`                         | Reject with feedback: `{ feedback }`. Re-runs the agent (streams like above).                                                                                                                                                        |
 | `POST /api/uploads/:id/cancel`                        | Stop an analysis in progress.                                                                                                                                                                                                        |
 | `POST /api/uploads/:id/apply`                         | Apply the proposal, minus `{ rejectedChangeIds }`.                                                                                                                                                                                   |
@@ -101,7 +216,7 @@ The UI's **Query inspector** panel lists every API call with its timing. With **
 
 - **Every sort has an index that matches it.** Per-theater indexes lead with `theater_id` (`(theater_id, start_time, id)` …). Global indexes (`(start_time, id)`, `(end_time, id)`, `(last_updated, id)`, `movies(title, id)`, `movies(status, id)`) serve users who belong to many theaters. Postgres walks the index in order, checks membership and filters per row, and stops at the page limit.
 - **Keyset pagination.** The cursor holds the last row's sort key plus `id`, and the next page starts at `(sort_key, id) > (cursor)`. Page 1000 costs the same as page 1; `OFFSET` would scan every skipped row.
-- **Trigram indexes** (`pg_trgm` GIN) on movie titles and theater names/locations for substring search.
+- **Trigram indexes** (`pg_trgm` GIN) on movie titles and theater names/locations for substring search. Title search also matches with punctuation and spacing removed ("spiderman" finds "Spider-Man"), backed by a second trigram index on the squashed title key.
 - **Capped counts.** The "N matching" total stops counting at 10,000 and the UI shows "10,000+", so counting never costs more than the page.
 - **Facets in one pass** with `GROUPING SETS`. The all-theaters scope is cached for 60 s per server instance.
 
@@ -139,9 +254,9 @@ Synthetic dataset: **20,003 theaters · 3,014 movies · 200,015 showtimes · 160
 | "N matching" count, broad                                | 236 ms (exact)            | **70–160 ms** (capped)             |                                       |
 | Facets, all 20k theaters                                 | 1.1 s                     | **0.9 s** cold / **0.23 s** cached |                                       |
 
-After the second round of indexes, no query plan uses a sequential scan. End-to-end API latency from a local dev server is about 50–60 ms, almost all of it the network round trip to the database. Keyset pagination was verified for every sort field and direction: walking all pages returns every row exactly once.
+After the second round of indexes, the only sequential scan left is on the small movies table (3,000 rows, about 5 ms) when a title search matches few or no films. End-to-end API latency from a local dev server is about 50–60 ms, almost all of it the network round trip to the database. Keyset pagination was verified for every sort field and direction: walking all pages returns every row exactly once.
 
-The full synthetic dataset took ~185 MB with indexes. The shared database now holds a small development set instead (1,000 theaters, 10,000 showtimes). To reproduce these numbers, recreate the full set with `npm run db:seed:scale -- --remove && npm run db:seed:scale` (about 35 s).
+The full synthetic dataset takes about 240 MB with indexes and is currently loaded in the shared database (the "Sam Scale" user belongs to all 20,000 of its theaters, which makes the scale visible in the UI). Remove it with `npm run db:seed:scale -- --remove`; recreate it with `npm run db:seed:scale` (about 35 s).
 
 ## Project layout
 
@@ -151,7 +266,10 @@ scripts/db.mjs           migrate / seed / seed-scale / reset
 src/server/              db client, access control, search, uploads, streaming (server-only)
 src/server/reconcile/    ScopeBot: CSV parsing, context, Gemini client, agent prompt, verification, apply
 src/app/api/             route handlers
-src/app/_components/     table, filters, theater picker, query inspector, ScopeBot, review modal
-public/scopebot/         transparent character videos
+src/app/_components/     table, filters, theater picker, query inspector, ScopeBot, review modal, upload history, Quick / Thorough switch
+public/scopebot/         ScopeBot as transparent video (WebM for Chrome, HEVC for Safari), idle and thinking loops
 src/lib/normalize.ts     title/auditorium identity keys (unicode dashes, case, punctuation)
+src/lib/format.ts        how showtimes are displayed (as stored, in every timezone)
+tests/                   unit tests (node:test via tsx), shared fixture schedule, tests/api/smoke.mjs
+evals/                   ScopeBot eval cases (JSON), runner, saved scorecards
 ```
