@@ -1,46 +1,67 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { assessmentData } from "~/data/assessment-data";
-import type { AssessmentUser } from "~/types/assessment";
+import { api } from "~/lib/api";
+import type { ApiUser } from "~/types/assessment";
 
 const STORAGE_KEY = "scope-assessment-user-id";
+const DEFAULT_USER_ID = "user-admin-avery";
 
-const safeGetStoredUserId = () => {
-  if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(STORAGE_KEY);
+const readStored = () => {
+  try {
+    return window.localStorage.getItem(STORAGE_KEY);
+  } catch {
+    return null;
+  }
 };
 
-export const defaultUserId = assessmentData.users[0]?.id ?? null;
-
-export function useMockSession(initialUserId: string | null = defaultUserId) {
-  const [userId, setUserId] = useState<string | null>(initialUserId);
+/**
+ * Mock session: no login, the acting user is picked from a list loaded from
+ * the database. The chosen id is sent to the API as x-user-id.
+ */
+export function useMockSession() {
+  const [users, setUsers] = useState<ApiUser[]>([]);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const stored = safeGetStoredUserId();
-    if (stored) {
-      setUserId(stored);
-    }
+    let cancelled = false;
+    api<{ users: ApiUser[] }>("/api/users")
+      .then(({ users }) => {
+        if (cancelled) return;
+        setUsers(users);
+        const stored = readStored();
+        const initial =
+          users.find((u) => u.id === stored)?.id ??
+          users.find((u) => u.id === DEFAULT_USER_ID)?.id ??
+          users[0]?.id ??
+          null;
+        setUserId(initial);
+      })
+      .catch((e: Error) => !cancelled && setError(e.message));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (userId) {
-      window.localStorage.setItem(STORAGE_KEY, userId);
-    } else {
-      window.localStorage.removeItem(STORAGE_KEY);
+    try {
+      if (userId) window.localStorage.setItem(STORAGE_KEY, userId);
+      else window.localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // storage unavailable; selection just won't persist
     }
   }, [userId]);
 
-  const user: AssessmentUser | null = useMemo(() => {
-    if (!userId) return null;
-    return assessmentData.users.find((candidate) => candidate.id === userId) ?? null;
-  }, [userId]);
+  const user = useMemo(() => users.find((u) => u.id === userId) ?? null, [users, userId]);
 
   return {
+    users,
     user,
     userId,
     setUserId,
     signOut: () => setUserId(null),
+    loading: users.length === 0 && !error,
+    error,
   };
 }

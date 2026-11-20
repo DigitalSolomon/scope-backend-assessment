@@ -1,6 +1,10 @@
-export type UserRole = "admin" | "viewer";
+/** A user's role is per theater: the same person can be admin at one theater and employee at another. */
+export type MemberRole = "admin" | "employee";
 export type ShowtimeStatus = "active" | "inactive" | "archived";
 export type MovieStatus = "approved" | "draft" | "flagged" | "needs-review";
+
+export const SHOWTIME_STATUSES: readonly ShowtimeStatus[] = ["active", "inactive", "archived"];
+export const MOVIE_STATUSES: readonly MovieStatus[] = ["approved", "draft", "flagged", "needs-review"];
 
 export interface Theater {
   id: string;
@@ -9,12 +13,131 @@ export interface Theater {
   timezone: string;
 }
 
+export interface TheaterMembership {
+  theaterId: string;
+  role: MemberRole;
+}
+
+/** Seed-data shape (src/data/assessment-data.ts). */
 export interface AssessmentUser {
   id: string;
   name: string;
   email: string;
-  role: UserRole;
-  theaterIds: string[];
+  memberships: TheaterMembership[];
+}
+
+// ------------------------------------------------------------ API shapes
+
+export interface ApiUser {
+  id: string;
+  name: string;
+  email: string;
+  theaterCount: number;
+  adminCount: number;
+}
+
+export interface ApiTheater extends Theater {
+  role: MemberRole;
+}
+
+export interface ApiShowtime {
+  id: string;
+  theaterId: string;
+  theaterName: string;
+  movieId: string;
+  movieTitle: string;
+  movieStatus: MovieStatus;
+  rating: string;
+  auditorium: string;
+  startTime: string;
+  endTime: string;
+  language: string;
+  format: string;
+  status: ShowtimeStatus;
+  lastUpdated: string;
+  /** The requesting user's role at this showtime's theater. */
+  role: MemberRole;
+}
+
+export type ShowtimeSortField =
+  | "movieTitle"
+  | "startTime"
+  | "endTime"
+  | "lastUpdated"
+  | "theaterName"
+  | "movieStatus";
+
+export interface QueryPlanSummary {
+  planningMs: number;
+  executionMs: number;
+  /** Scan nodes from the plan: which tables were read and through which index. */
+  scans: { node: string; relation?: string; index?: string; rows?: number }[];
+  usesSeqScan: boolean;
+}
+
+export interface ShowtimeSearchResponse {
+  rows: ApiShowtime[];
+  nextCursor: string | null;
+  /** Only computed for the first page; capped (see totalCapped). */
+  total: number | null;
+  /** True when there are more matches than the count cap, i.e. "10,000+". */
+  totalCapped?: boolean;
+  timing: { queryMs: number; countMs: number | null };
+  plan?: QueryPlanSummary;
+}
+
+export type UploadStatus =
+  | "received"
+  | "analyzing"
+  | "pending_review"
+  | "applying"
+  | "applied"
+  | "partially_applied"
+  | "discarded"
+  | "failed";
+
+export interface ApiUploadSummary {
+  id: string;
+  theaterId: string;
+  uploadedBy: string | null;
+  uploadedByName: string | null;
+  fileName: string;
+  rowCount: number | null;
+  status: UploadStatus;
+  error: string | null;
+  addsCount: number;
+  updatesCount: number;
+  archivesCount: number;
+  appliedCount: number;
+  failedCount: number;
+  createdAt: string;
+  analyzedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface ApiUploadEvent {
+  id: number;
+  kind: "status" | "error" | "feedback" | "note";
+  status: UploadStatus | null;
+  message: string | null;
+  actorId: string | null;
+  createdAt: string;
+}
+
+export interface ApiUploadDetail extends ApiUploadSummary {
+  summary: string | null;
+  warnings: string[];
+  /** Proposed changes in the same shape the preview modal renders. */
+  changes: PreviewChanges;
+  events: ApiUploadEvent[];
+}
+
+export interface ShowtimeFacets {
+  formats: string[];
+  languages: string[];
+  ratings: string[];
+  auditoriums: string[];
+  movieStatuses: string[];
 }
 
 export interface Showtime {

@@ -23,39 +23,45 @@ const theaters: Theater[] = [
 
 const users: AssessmentUser[] = [
   {
+    // Mixed roles: admin at Downtown, employee at Riverside.
     id: "user-admin-avery",
     name: "Avery Admin",
     email: "avery.admin@example.com",
-    role: "admin",
-    theaterIds: ["theater-downtown", "theater-riverside"],
+    memberships: [
+      { theaterId: "theater-downtown", role: "admin" },
+      { theaterId: "theater-riverside", role: "employee" },
+    ],
   },
   {
     id: "user-admin-casey",
     name: "Casey Operator",
     email: "casey.operator@example.com",
-    role: "admin",
-    theaterIds: ["theater-downtown", "theater-riverside", "theater-uptown"],
+    memberships: [
+      { theaterId: "theater-downtown", role: "admin" },
+      { theaterId: "theater-riverside", role: "admin" },
+      { theaterId: "theater-uptown", role: "admin" },
+    ],
   },
   {
     id: "user-viewer-riley",
     name: "Riley Viewer",
     email: "riley.viewer@example.com",
-    role: "viewer",
-    theaterIds: ["theater-downtown"],
+    memberships: [{ theaterId: "theater-downtown", role: "employee" }],
   },
   {
     id: "user-viewer-morgan",
     name: "Morgan Multi",
     email: "morgan.multi@example.com",
-    role: "viewer",
-    theaterIds: ["theater-downtown", "theater-uptown"],
+    memberships: [
+      { theaterId: "theater-downtown", role: "employee" },
+      { theaterId: "theater-uptown", role: "employee" },
+    ],
   },
   {
     id: "user-viewer-jordan",
     name: "Jordan NoTheater",
     email: "jordan.notheater@example.com",
-    role: "viewer",
-    theaterIds: [],
+    memberships: [],
   },
 ];
 

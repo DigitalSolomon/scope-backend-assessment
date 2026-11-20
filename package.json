@@ -6,6 +6,10 @@
   "scripts": {
     "build": "next build",
     "check": "next lint && tsc --noEmit",
+    "db:migrate": "node --experimental-strip-types --no-warnings --env-file=.env scripts/db.mjs migrate",
+    "db:seed": "node --experimental-strip-types --no-warnings --env-file=.env scripts/db.mjs seed",
+    "db:seed:scale": "node --experimental-strip-types --no-warnings --env-file=.env scripts/db.mjs seed-scale",
+    "db:reset": "node --experimental-strip-types --no-warnings --env-file=.env scripts/db.mjs reset",
     "dev": "next dev --turbo",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,mdx}\" --cache",
     "format:write": "prettier --write \"**/*.{ts,tsx,js,jsx,mdx}\" --cache",
