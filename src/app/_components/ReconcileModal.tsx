@@ -203,7 +203,7 @@ export function ReconcileModal(props: ReconcileModalProps) {
   // missing from the file start unticked: the file may be a patch, so
   // archiving them is the reviewer's call.
   useEffect(() => {
-    const suggestions = upload && !upload.archivesPreselected ? upload.items.filter((i) => i.kind === "archive").map((i) => i.id) : [];
+    const suggestions = (upload?.items ?? []).filter((i) => !i.preselected).map((i) => i.id);
     setRejected(new Set(suggestions));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [upload?.id, upload?.analyzedAt]);
@@ -224,7 +224,9 @@ export function ReconcileModal(props: ReconcileModalProps) {
     return {
       adds: items.filter((i) => i.kind === "add"),
       updates: items.filter((i) => i.kind === "update" || i.kind === "reactivate"),
-      archives: items.filter((i) => i.kind === "archive"),
+      // Asked for by the reviewer (ticked) vs. merely missing from the file (suggestions).
+      archives: items.filter((i) => i.kind === "archive" && i.preselected),
+      missing: items.filter((i) => i.kind === "archive" && !i.preselected),
       unchanged: items.filter((i) => i.kind === "unchanged"),
       duplicates: items.filter((i) => i.kind === "duplicate"),
       invalid: items.filter((i) => i.kind === "invalid"),
@@ -314,8 +316,7 @@ export function ReconcileModal(props: ReconcileModalProps) {
 
   // ----------------------------------------------------------- review (+ feedback overlay)
   const readOnly = phase === "view";
-  const suggestedArchives = Boolean(upload) && !upload!.archivesPreselected;
-  const total = groups.adds.length + groups.updates.length + (suggestedArchives ? 0 : groups.archives.length);
+  const total = groups.adds.length + groups.updates.length + groups.archives.length;
   const plural = (n: number) => `${n} change${n === 1 ? "" : "s"}`;
   const pastText =
     upload?.status === "applied"
@@ -380,7 +381,7 @@ export function ReconcileModal(props: ReconcileModalProps) {
             </ul>
           )}
 
-          {total === 0 && groups.archives.length === 0 && !readOnly && (
+          {total === 0 && groups.missing.length === 0 && !readOnly && (
             <p className="text-center text-gray-400">No changes needed. The schedule already matches this file.</p>
           )}
 
@@ -394,17 +395,22 @@ export function ReconcileModal(props: ReconcileModalProps) {
               <ChangeCard key={i.id} item={i} tone="yellow" rejected={rejected.has(i.id)} onToggle={() => toggle(i.id)} readOnly={readOnly} />
             ))}
           </Section>
+          <Section title="Archived Showtimes" color="text-red-400" items={groups.archives.length}>
+            {groups.archives.map((i) => (
+              <ChangeCard key={i.id} item={i} tone="red" rejected={rejected.has(i.id)} onToggle={() => toggle(i.id)} readOnly={readOnly} />
+            ))}
+          </Section>
           <Section
-            title={suggestedArchives ? "Not in This File" : "Archived Showtimes"}
+            title="Not in This File"
             color="text-red-400"
-            items={groups.archives.length}
+            items={groups.missing.length}
             note={
-              suggestedArchives && !readOnly
-                ? "These active showings are on days this file covers but aren't in it. If the file is the full schedule for those days, tick the ones to archive; if it's a partial update, leave them."
-                : undefined
+              readOnly
+                ? undefined
+                : "These active showings are on days this file covers but aren't in it. If the file is the full schedule for those days, tick the ones to archive; if it's a partial update, leave them."
             }
           >
-            {groups.archives.map((i) => (
+            {groups.missing.map((i) => (
               <ChangeCard key={i.id} item={i} tone="red" rejected={rejected.has(i.id)} onToggle={() => toggle(i.id)} readOnly={readOnly} />
             ))}
           </Section>

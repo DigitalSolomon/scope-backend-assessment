@@ -45,7 +45,7 @@ export interface Prepared {
 /** Parse a CSV and build the context exactly as an upload would, from the fixture schedule. */
 export function prepare(
   csv: string,
-  opts: { theaterId?: string; patch?: Record<string, Partial<StoredShowtime>> } = {},
+  opts: { theaterId?: string; patch?: Record<string, Partial<StoredShowtime>>; catalog?: string[] } = {},
 ): Prepared {
   const theaterId = opts.theaterId ?? DOWNTOWN;
   const theater = assessmentData.theaters.find((t) => t.id === theaterId)!;
@@ -53,7 +53,7 @@ export function prepare(
   const { rows, invalid } = parseShowtimeCsv(csv);
   const auditoriums = [...new Set(stored.map((s) => s.auditorium))].sort().map((name) => ({ id: `aud-${name}`, name }));
   return {
-    ctx: buildContext({ id: theater.id, name: theater.name, timezone: theater.timezone }, stored, auditoriums, rows),
+    ctx: buildContext({ id: theater.id, name: theater.name, timezone: theater.timezone }, stored, auditoriums, rows, opts.catalog),
     rows,
     invalid,
   };

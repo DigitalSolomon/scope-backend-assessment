@@ -3,7 +3,7 @@ import { errorResponse, getUserId, HttpError } from "~/server/access";
 import { MAX_CSV_BYTES } from "~/server/reconcile/csv";
 import { THINKING_LEVELS } from "~/server/reconcile/gemini";
 import { assertCanUpload, createUpload } from "~/server/reconcile/service";
-import { ndjson, wantsStream } from "~/server/stream";
+import { jsonKeepAlive, ndjson, wantsStream } from "~/server/stream";
 import { listUploads } from "~/server/uploads";
 
 export const dynamic = "force-dynamic";
@@ -46,11 +46,9 @@ export async function POST(request: Request) {
       throw new HttpError(400, "Expected { theaterId, fileName, csv, thinkingLevel? } (CSV up to 1 MB; thinkingLevel is minimal, low, medium or high)");
     }
     const { theaterId, fileName, csv, thinkingLevel } = parsed.data;
-    if (wantsStream(request)) {
-      await assertCanUpload(userId, theaterId); // fail fast with a normal 403 before streaming
-      return ndjson((send) => createUpload(userId, theaterId, fileName, csv, send, { thinkingLevel }));
-    }
-    return Response.json(await createUpload(userId, theaterId, fileName, csv, undefined, { thinkingLevel }));
+    await assertCanUpload(userId, theaterId); // fail fast with a normal 403 / 429 before the response starts
+    if (wantsStream(request)) return ndjson((send) => createUpload(userId, theaterId, fileName, csv, send, { thinkingLevel }));
+    return jsonKeepAlive(() => createUpload(userId, theaterId, fileName, csv, undefined, { thinkingLevel }));
   } catch (error) {
     return errorResponse(error);
   }

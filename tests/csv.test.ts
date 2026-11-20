@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { CsvError, detectDelimiter, parseCsvText, parseShowtimeCsv } from "~/server/reconcile/csv";
+import { CsvError, detectDelimiter, parseCsvText, parseShowtimeCsv, toIso } from "~/server/reconcile/csv";
 import { csv, HEADER, line, sample } from "./fixture";
 
 const DUNE = line("Dune: Part Two", "Auditorium 1", "2025-03-15T20:00:00Z", "2025-03-15T22:46:00Z", { format: "IMAX" });
@@ -69,6 +69,51 @@ describe("CSV parsing", () => {
   it("never reads a loose date as a year-2001 showtime", () => {
     const { invalid } = parseShowtimeCsv(csv(DUNE, line("Wonka", "Auditorium 3", "Mar 15 5:30 PM", "Mar 15 7:20 PM")));
     assert.equal(invalid.length, 1);
+  });
+
+  describe("date-times", () => {
+    const times = (start: string, end: string) => parseShowtimeCsv(csv(DUNE, line("Wonka", "Auditorium 3", start, end)));
+    const second = (start: string, end: string) => times(start, end).rows[1];
+    const reason = (start: string, end: string) => times(start, end).invalid[0]?.reason ?? "";
+
+    it("a time with no zone is read as written, whatever timezone the server runs in", () => {
+      const before = process.env.TZ;
+      try {
+        for (const tz of ["UTC", "America/Los_Angeles", "Asia/Tokyo"]) {
+          process.env.TZ = tz;
+          assert.equal(second("2025-03-17 15:45", "2025-03-17 17:32")!.startTime, "2025-03-17T15:45:00.000Z", tz);
+          assert.equal(second("2025-03-17T15:45:00", "2025-03-17T17:32:00")!.endTime, "2025-03-17T17:32:00.000Z", tz);
+        }
+      } finally {
+        if (before === undefined) delete process.env.TZ;
+        else process.env.TZ = before;
+      }
+    });
+
+    it("an explicit zone or offset is honored", () => {
+      assert.equal(toIso("2025-03-12T22:00:00Z"), "2025-03-12T22:00:00.000Z");
+      assert.equal(toIso("2025-03-12T17:00:00-05:00"), "2025-03-12T22:00:00.000Z");
+      assert.equal(toIso("2025-03-12 17:00-0500"), "2025-03-12T22:00:00.000Z");
+      assert.equal(toIso("2025-03-13T03:30:00.250+05:30"), "2025-03-12T22:00:00.250Z");
+    });
+
+    it("an impossible date is refused, not rolled into the next month", () => {
+      assert.match(reason("2025-02-30T10:00:00Z", "2025-02-30T12:00:00Z"), /start_time "2025-02-30T10:00:00Z" is not a valid date-time/);
+      assert.equal(toIso("2025-13-01T10:00:00Z"), null);
+      assert.equal(toIso("2025-03-17T24:30:00Z"), null);
+      assert.equal(toIso("0025-03-17T15:45:00Z"), null, "a mistyped year");
+    });
+
+    it("a showtime needs a time of day; last_updated may be just a date", () => {
+      assert.match(reason("2025-03-17", "2025-03-18"), /start_time "2025-03-17" has a date but no time/);
+      const { rows } = parseShowtimeCsv(csv(line("Wonka", "Auditorium 3", "2025-03-15T16:00:00Z", "2025-03-15T17:56:00Z", { updated: "2025-03-14" })));
+      assert.equal(rows[0]!.lastUpdated, "2025-03-14T00:00:00.000Z");
+    });
+
+    it("a showing more than a day long is a typo, not a film", () => {
+      assert.match(reason("2025-03-17T15:45:00Z", "2025-03-18T21:45:00Z"), /more than 24 hours after start_time/);
+      assert.ok(second("2025-03-15T22:45:00Z", "2025-03-16T01:31:00Z"), "crossing midnight is fine");
+    });
   });
 
   it("uppercases codes so 'imax' and 'IMAX' are the same", () => {

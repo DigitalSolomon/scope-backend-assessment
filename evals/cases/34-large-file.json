@@ -1,0 +1,38 @@
+{
+  "title": "A 150-row file for a week",
+  "checks": "Large files: exact matches are decided in code, the model judges the rest, inside the time budget",
+  "catalog": [
+    "Dune: Part Two",
+    "Wonka",
+    "Oppenheimer",
+    "Inside Out 2",
+    "Spider-Man: Homecoming",
+    "Kung Fu Panda 4"
+  ],
+  "csvFile": "evals/files/one-week.csv",
+  "expect": {
+    "counts": {
+      "add": 150,
+      "update": 0,
+      "archive": 0
+    },
+    "changes": [
+      {
+        "kind": "add",
+        "title": "The Long Tide"
+      },
+      {
+        "kind": "add",
+        "title": "Dune: Part Two",
+        "room": "Auditorium 1"
+      }
+    ],
+    "absent": [
+      {
+        "kind": "add",
+        "title": "the long TIDE"
+      }
+    ],
+    "message": "all 150 rows"
+  }
+}

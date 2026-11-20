@@ -161,10 +161,15 @@ async function analyzeRows(
     });
     let previous: unknown = null;
     if (feedback) {
-      previous = await sql`
+      const changes = await sql<{ kind: string; showtimeId: string | null }[]>`
         select kind, csv_rows as rows, showtime_id as "showtimeId", movie_title as title,
                auditorium, explanation
         from hv_theater.upload_changes where upload_id = ${uploadId} order by position`;
+      // Tell the model which archive proposals the reviewer had asked for and
+      // which were only suggestions, so feedback about something else does
+      // not turn a suggestion into a selected archive.
+      const ticked = await preselectedArchives(uploadId);
+      previous = changes.map((c) => (c.kind === "archive" ? { ...c, selected: ticked === "all" || ticked.includes(c.showtimeId ?? "") } : c));
     }
     const outcome = await runAgent(
       ctx,
@@ -189,7 +194,7 @@ async function analyzeRows(
         source: outcome.source,
         thoughts: outcome.thoughts,
         agentError: outcome.error,
-        archivesPreselected: outcome.archivesPreselected,
+        preselectedArchives: outcome.preselectedArchives,
         thinkingLevel: outcome.thinkingLevel,
       },
     });
@@ -213,8 +218,40 @@ async function analyzeRows(
   }
 }
 
-/** Throws unless the user may upload to this theater (checked before streaming starts). */
-export const assertCanUpload = requireAdmin;
+/**
+ * Which archive proposals of the current proposal start ticked: the showtime
+ * ids recorded with the analysis ("all" for proposals saved before they were
+ * recorded per showtime).
+ */
+async function preselectedArchives(uploadId: string): Promise<string[] | "all"> {
+  const [last] = await sql<{ detail: { preselectedArchives?: string[]; archivesPreselected?: boolean } | null }[]>`
+    select detail from hv_theater.upload_events
+    where upload_id = ${uploadId} and kind = 'note' and detail->>'type' = 'analysis'
+    order by created_at desc, id desc limit 1`;
+  const d = last?.detail;
+  if (Array.isArray(d?.preselectedArchives)) return d.preselectedArchives;
+  return d?.archivesPreselected === false ? [] : "all";
+}
+
+/** Analyses call a metered model, and this demo has no login: a small brake per user. */
+export const MAX_ANALYSES_PER_MINUTE = 6;
+
+async function throttle(userId: string) {
+  const [recent] = await sql<{ n: number }[]>`
+    select (select count(*) from hv_theater.csv_uploads
+            where uploaded_by = ${userId} and created_at > now() - interval '1 minute')
+         + (select count(*) from hv_theater.upload_events
+            where actor_id = ${userId} and kind = 'feedback' and created_at > now() - interval '1 minute') as n`;
+  if (Number(recent?.n ?? 0) >= MAX_ANALYSES_PER_MINUTE) {
+    throw new HttpError(429, "That's a lot of uploads in one minute. Give ScopeBot a moment, then try again.");
+  }
+}
+
+/** Throws unless the user may start an analysis at this theater now (checked before streaming starts). */
+export async function assertCanUpload(userId: string, theaterId: string) {
+  await requireAdmin(userId, theaterId);
+  await throttle(userId);
+}
 
 /** Record the upload first (so failed attempts are visible), then analyze it. */
 export async function createUpload(
@@ -225,7 +262,7 @@ export async function createUpload(
   progress: Progress = () => undefined,
   options: AnalyzeOptions = {},
 ) {
-  await requireAdmin(userId, theaterId);
+  await assertCanUpload(userId, theaterId);
   const sha = createHash("sha256").update(csv).digest("hex");
   // Postgres text cannot hold NUL bytes. A binary file (image, spreadsheet) is
   // still recorded as a failed attempt, without its unusable contents.
@@ -263,6 +300,7 @@ export async function retryUpload(
   const u = await loadForAction(userId, uploadId);
   if (u.status !== "pending_review") throw new HttpError(409, `Upload is ${u.status}, not awaiting review`);
   if (!u.raw_csv) throw new HttpError(409, "Original CSV is not stored for this upload");
+  await throttle(userId);
   await event(uploadId, "feedback", { message: feedback, actorId: userId });
   progress({ type: "started", uploadId });
   progress({ type: "step", key: "received", state: "done", label: "Got your feedback" });

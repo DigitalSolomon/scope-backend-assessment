@@ -54,6 +54,8 @@ interface EvalCase {
   csvFile?: string;
   /** Changes to the sample schedule before the upload, by showtime id. */
   schedule?: Record<string, Partial<StoredShowtime>>;
+  /** Films already in the catalog (at any theater) that resemble titles in the file. */
+  catalog?: string[];
   /** If set: propose once, then send this reviewer feedback; the second proposal is graded. */
   feedback?: string;
   expect: {
@@ -65,6 +67,8 @@ interface EvalCase {
     absent?: ChangeMatch[];
     /** Regular expressions; each must match one of the warnings shown to the reviewer. */
     warnings?: string[];
+    /** How many archive proposals must start ticked (only those a reviewer's feedback asked for should). */
+    tickedArchives?: number;
     /** Regular expression ScopeBot's message must match / must not match. */
     message?: string;
     messageNot?: string;
@@ -103,6 +107,9 @@ function grade(c: EvalCase, p: Prepared, out: AgentOutcome): string[] {
   for (const w of e.warnings ?? []) {
     if (!out.warnings.some((x) => new RegExp(w, "i").test(x))) problems.push(`no warning matching /${w}/`);
   }
+  if (e.tickedArchives !== undefined && out.preselectedArchives.length !== e.tickedArchives) {
+    problems.push(`expected ${e.tickedArchives} ticked archive(s), got ${out.preselectedArchives.length}`);
+  }
   if (e.message && !new RegExp(e.message, "i").test(out.message)) problems.push(`message does not match /${e.message}/`);
   if (e.messageNot && new RegExp(e.messageNot, "i").test(out.message)) problems.push(`message matches /${e.messageNot}/`);
 
@@ -129,7 +136,7 @@ function grade(c: EvalCase, p: Prepared, out: AgentOutcome): string[] {
     if (clockTimesIn(sentence).some((t) => !own.has(t))) problems.push(`explanation quotes a time that is not this showtime's: "${sentence}"`);
   }
   const stated = /\b(\d+)\s+(?:proposed\s+)?changes?\b/i.exec(out.message);
-  const actual = drafts.filter((d) => ["add", "update", "reactivate"].includes(d.kind) || (out.archivesPreselected && d.kind === "archive")).length;
+  const actual = drafts.filter((d) => ["add", "update", "reactivate"].includes(d.kind) || (d.kind === "archive" && out.preselectedArchives.includes(d.showtimeId ?? ""))).length;
   if (stated && Number(stated[1]) !== actual) problems.push(`message says ${stated[1]} changes, proposal has ${actual}`);
   return problems;
 }
@@ -146,8 +153,11 @@ function csvOf(c: EvalCase): string {
 }
 
 /** What the model is shown as its previous proposal on a feedback run (same shape the app sends). */
-const previous = (drafts: ChangeDraft[]) =>
-  drafts.map((d) => ({ kind: d.kind, rows: d.csvRows, showtimeId: d.showtimeId, title: d.movieTitle, auditorium: d.auditorium, explanation: d.explanation }));
+const previous = (out: AgentOutcome) =>
+  out.drafts.map((d) => ({
+    kind: d.kind, rows: d.csvRows, showtimeId: d.showtimeId, title: d.movieTitle, auditorium: d.auditorium, explanation: d.explanation,
+    ...(d.kind === "archive" ? { selected: out.preselectedArchives.includes(d.showtimeId ?? "") } : {}),
+  }));
 
 interface RunResult {
   pass: boolean;
@@ -162,9 +172,9 @@ interface RunResult {
 async function runOnce(c: EvalCase): Promise<RunResult> {
   const started = Date.now();
   try {
-    const p = prepare(csvOf(c), { patch: c.schedule });
+    const p = prepare(csvOf(c), { patch: c.schedule, catalog: c.catalog });
     let out = await runAgent(p.ctx, p.rows, p.invalid);
-    if (c.feedback) out = await runAgent(p.ctx, p.rows, p.invalid, { text: c.feedback, previous: previous(out.drafts) });
+    if (c.feedback) out = await runAgent(p.ctx, p.rows, p.invalid, { text: c.feedback, previous: previous(out) });
     const problems = grade(c, p, out);
     const kinds: Record<string, number> = {};
     for (const d of out.drafts) kinds[d.kind] = (kinds[d.kind] ?? 0) + 1;

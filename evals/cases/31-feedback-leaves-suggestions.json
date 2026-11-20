@@ -1,0 +1,24 @@
+{
+  "title": "Feedback about one showing leaves a missing showtime as a suggestion",
+  "checks": "Feedback never turns an unticked archive suggestion into a selected one",
+  "rows": [
+    "Downtown Cinema 7,Spider-Man: Homecoming,Auditorium 1,2025-03-15T18:00:00Z,2025-03-15T20:13:00Z,EN,2D,PG-13,2025-03-14T12:00:00Z",
+    "Downtown Cinema 7,Inside Out 2,Auditorium 2,2025-03-15T17:30:00Z,2025-03-15T19:20:00Z,EN,3D,PG,2025-03-14T12:00:00Z",
+    "Downtown Cinema 7,Dune: Part Two,Auditorium 1,2025-03-15T20:00:00Z,2025-03-15T22:46:00Z,EN,IMAX,PG-13,2025-03-14T12:00:00Z",
+    "Downtown Cinema 7,Wonka,Auditorium 3,2025-03-15T16:00:00Z,2025-03-15T17:56:00Z,EN,2D,PG,2025-03-14T12:00:00Z"
+  ],
+  "feedback": "Keep Wonka archived.",
+  "expect": {
+    "counts": {
+      "reactivate": 0,
+      "archive": 1
+    },
+    "tickedArchives": 0,
+    "changes": [
+      {
+        "kind": "archive",
+        "title": "Dune: Part Two"
+      }
+    ]
+  }
+}

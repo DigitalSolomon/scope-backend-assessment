@@ -1,0 +1,24 @@
+{
+  "title": "The same showing twice, with different rooms",
+  "checks": "Conflicting duplicates: the newer row is used and the reviewer is told",
+  "rows": [
+    "Downtown Cinema 7,Kung Fu Panda 4,Auditorium 5,2025-03-15T18:30:00Z,2025-03-15T20:10:00Z,EN,2D,PG,2025-03-14T12:00:00Z",
+    "Downtown Cinema 7,Kung Fu Panda 4,Auditorium 9,2025-03-15T18:30:00Z,2025-03-15T20:10:00Z,EN,2D,PG,2025-03-15T09:00:00Z"
+  ],
+  "expect": {
+    "counts": {
+      "add": 1,
+      "duplicate": 1
+    },
+    "changes": [
+      {
+        "kind": "add",
+        "title": "Kung Fu Panda 4",
+        "room": "Auditorium 9"
+      }
+    ],
+    "warnings": [
+      "Rows 1 and 2 are the same showing but disagree on room"
+    ]
+  }
+}

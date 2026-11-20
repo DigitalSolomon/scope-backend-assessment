@@ -1,0 +1,23 @@
+{
+  "title": "A row for a theater whose name differs only by its number",
+  "checks": "Another theater's row is skipped by code, however similar the name",
+  "rows": [
+    "Downtown Cinema 7,Dune: Part Two,Auditorium 1,2025-03-15T20:00:00Z,2025-03-15T22:46:00Z,EN,IMAX,PG-13,2025-03-14T12:00:00Z",
+    "Downtown Cinema 8,Barbie,Auditorium 5,2025-03-15T12:00:00Z,2025-03-15T13:54:00Z,EN,2D,PG-13,2025-03-14T12:00:00Z"
+  ],
+  "expect": {
+    "counts": {
+      "add": 0,
+      "invalid": 1
+    },
+    "absent": [
+      {
+        "kind": "add",
+        "title": "Barbie"
+      }
+    ],
+    "warnings": [
+      "1 row is for Downtown Cinema 8, not Downtown Cinema 7"
+    ]
+  }
+}

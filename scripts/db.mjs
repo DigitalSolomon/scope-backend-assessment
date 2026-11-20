@@ -141,6 +141,27 @@ async function seed() {
         language = excluded.language, format = excluded.format,
         status = excluded.status, last_updated = excluded.last_updated,
         version = hv_theater.showtimes.version + 1`;
+
+    // Back to the sample state, not just "sample rows present": an upsert
+    // alone leaves behind whatever confirmed uploads added (a showing, its
+    // film, a new room) and every past upload. Remove those, so the README
+    // walkthrough gives the documented results again. The synthetic scale
+    // dataset keeps its schedule; only its upload history is cleared.
+    const sampleTheaters = theaters.map((t) => t.id);
+    await tx`delete from hv_theater.csv_uploads`;
+    await tx`
+      delete from hv_theater.showtimes
+      where theater_id in ${tx(sampleTheaters)} and id not in ${tx(rows.map((r) => r.id))}`;
+    await tx`
+      delete from hv_theater.auditoriums a
+      where a.theater_id in ${tx(sampleTheaters)}
+        and a.name_key not in ${tx([...new Set([...auditoriums.values()].map((a) => a.name_key))])}
+        and not exists (select 1 from hv_theater.showtimes s where s.auditorium_id = a.id)`;
+    await tx`
+      delete from hv_theater.movies m
+      where m.id not like 'scale-%'
+        and m.title_key not in ${tx([...movies.keys()])}
+        and not exists (select 1 from hv_theater.showtimes s where s.movie_id = m.id)`;
     // The mock PreviewChanges become example upload records, so the stored
     // shape (upload -> changes -> diffs, plus its event log) is visible. They
     // are stored as discarded: a finished, read-only example in the upload

@@ -122,6 +122,12 @@ export interface ApiChange {
   confidence: number | null;
   source: "agent" | "rule";
   decision: "pending" | "accepted" | "rejected";
+  /**
+   * Whether this change starts ticked in the review. Everything does, except
+   * a showtime that is merely missing from the file: that is a suggestion
+   * (the file may be a patch) until the reviewer ticks it or asks for it.
+   */
+  preselected: boolean;
   diffs: FieldDiff[];
   applyError: string | null;
   /** When this change was written to the schedule (null if not applied). */
@@ -168,11 +174,6 @@ export interface ApiUploadDetail extends ApiUploadSummary {
   thoughts: string[];
   /** Thinking level the proposal was produced at ("low" = Quick, "medium" = Thorough); null for rule-based. */
   thinkingLevel: string | null;
-  /**
-   * Whether archive proposals start ticked. On a first pass they do not: a
-   * showtime missing from a file is a suggestion, since the file may be a patch.
-   */
-  archivesPreselected: boolean;
   /** Proposed changes in the same shape the preview modal renders. */
   changes: PreviewChanges;
   /** Every proposed action, including unchanged / duplicate / invalid rows. */

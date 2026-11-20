@@ -4,39 +4,39 @@
     "model": "gemini-3.8-flash",
     "thinkingLevel": "low",
     "fallbackModel": "gemini-3.5-flash-lite",
-    "cases": 28,
-    "passed": 28,
-    "total": 28,
+    "cases": 34,
+    "passed": 34,
+    "total": 34,
     "passRate": 100,
     "medianSeconds": 8,
     "slowestSeconds": 38,
     "lighterPassRuns": 0,
-    "casesRerunLater": 5
+    "casesRerunLater": 15
   },
   "cases": [
     {
       "id": "01-sample-existing",
       "title": "Sample file existing.csv",
       "checks": "Reactivation; stale rows left alone",
+      "ranAt": "2026-11-20T10:26:06.693Z",
       "passed": 1,
       "runs": 1,
       "medianSeconds": 8,
+      "slowestSeconds": 8,
       "lighterPass": 0,
-      "failures": [],
-      "ranAt": "2026-11-20T08:14:18.963Z",
-      "slowestSeconds": 8
+      "failures": []
     },
     {
       "id": "02-sample-new-drop",
       "title": "Sample file new-drop.csv",
       "checks": "New record; duplicate row; messy titles and rooms matched",
+      "ranAt": "2026-11-20T10:26:06.693Z",
       "passed": 1,
       "runs": 1,
-      "medianSeconds": 9,
+      "medianSeconds": 8,
+      "slowestSeconds": 8,
       "lighterPass": 0,
-      "failures": [],
-      "ranAt": "2026-11-20T08:14:18.963Z",
-      "slowestSeconds": 9
+      "failures": []
     },
     {
       "id": "03-new-drop-after-existing",
@@ -258,13 +258,13 @@
       "id": "21-feedback-keep-archived",
       "title": "Feedback: keep one showing archived",
       "checks": "Reject with feedback is honored",
+      "ranAt": "2026-11-20T10:26:06.693Z",
       "passed": 1,
       "runs": 1,
-      "medianSeconds": 25,
+      "medianSeconds": 21,
+      "slowestSeconds": 21,
       "lighterPass": 0,
-      "failures": [],
-      "ranAt": "2026-11-20T08:14:18.963Z",
-      "slowestSeconds": 25
+      "failures": []
     },
     {
       "id": "22-feedback-remove-a-change",
@@ -282,13 +282,13 @@
       "id": "23-feedback-override-attempt",
       "title": "Feedback that tries to override the rules",
       "checks": "Feedback cannot archive matched showtimes or claim work is done",
+      "ranAt": "2026-11-20T10:26:06.693Z",
       "passed": 1,
       "runs": 1,
-      "medianSeconds": 20,
+      "medianSeconds": 22,
+      "slowestSeconds": 22,
       "lighterPass": 0,
-      "failures": [],
-      "ranAt": "2026-11-20T08:14:18.963Z",
-      "slowestSeconds": 20
+      "failures": []
     },
     {
       "id": "24-invalid-rows-mixed",
@@ -342,11 +342,83 @@
       "id": "28-feedback-add-instead",
       "title": "Feedback: add it as a new movie instead of renaming",
       "checks": "After feedback, an add in an occupied slot stays an add and is flagged as a double booking",
-      "ranAt": "2026-11-20T09:25:08.087Z",
+      "ranAt": "2026-11-20T10:26:06.693Z",
       "passed": 1,
       "runs": 1,
-      "medianSeconds": 11,
-      "slowestSeconds": 11,
+      "medianSeconds": 13,
+      "slowestSeconds": 13,
+      "lighterPass": 0,
+      "failures": []
+    },
+    {
+      "id": "29-lookalike-theater",
+      "title": "A row for a theater whose name differs only by its number",
+      "checks": "Another theater's row is skipped by code, however similar the name",
+      "ranAt": "2026-11-20T10:26:06.693Z",
+      "passed": 1,
+      "runs": 1,
+      "medianSeconds": 5,
+      "slowestSeconds": 5,
+      "lighterPass": 0,
+      "failures": []
+    },
+    {
+      "id": "30-conflicting-duplicates",
+      "title": "The same showing twice, with different rooms",
+      "checks": "Conflicting duplicates: the newer row is used and the reviewer is told",
+      "ranAt": "2026-11-20T10:26:06.693Z",
+      "passed": 1,
+      "runs": 1,
+      "medianSeconds": 6,
+      "slowestSeconds": 6,
+      "lighterPass": 0,
+      "failures": []
+    },
+    {
+      "id": "31-feedback-leaves-suggestions",
+      "title": "Feedback about one showing leaves a missing showtime as a suggestion",
+      "checks": "Feedback never turns an unticked archive suggestion into a selected one",
+      "ranAt": "2026-11-20T10:26:06.693Z",
+      "passed": 1,
+      "runs": 1,
+      "medianSeconds": 23,
+      "slowestSeconds": 23,
+      "lighterPass": 0,
+      "failures": []
+    },
+    {
+      "id": "32-feedback-asks-to-archive",
+      "title": "Feedback: this is the full schedule, archive what is missing",
+      "checks": "An archive the reviewer asks for is proposed and selected",
+      "ranAt": "2026-11-20T10:26:06.693Z",
+      "passed": 1,
+      "runs": 1,
+      "medianSeconds": 13,
+      "slowestSeconds": 13,
+      "lighterPass": 0,
+      "failures": []
+    },
+    {
+      "id": "33-catalog-typo",
+      "title": "A typo of a film that is not showing that day",
+      "checks": "A film already in the catalog is matched, not added as a second film",
+      "ranAt": "2026-11-20T10:26:06.693Z",
+      "passed": 1,
+      "runs": 1,
+      "medianSeconds": 6,
+      "slowestSeconds": 6,
+      "lighterPass": 0,
+      "failures": []
+    },
+    {
+      "id": "34-large-file",
+      "title": "A 150-row file for a week",
+      "checks": "Large files: exact matches are decided in code, the model judges the rest, inside the time budget",
+      "ranAt": "2026-11-20T10:29:50.933Z",
+      "passed": 1,
+      "runs": 1,
+      "medianSeconds": 7,
+      "slowestSeconds": 7,
       "lighterPass": 0,
       "failures": []
     }

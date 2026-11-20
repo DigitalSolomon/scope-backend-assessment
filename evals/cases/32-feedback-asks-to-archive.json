@@ -1,0 +1,16 @@
+{
+  "title": "Feedback: this is the full schedule, archive what is missing",
+  "checks": "An archive the reviewer asks for is proposed and selected",
+  "rows": [
+    "Downtown Cinema 7,Spider-Man: Homecoming,Auditorium 1,2025-03-15T18:00:00Z,2025-03-15T20:13:00Z,EN,2D,PG-13,2025-03-14T12:00:00Z",
+    "Downtown Cinema 7,Inside Out 2,Auditorium 2,2025-03-15T17:30:00Z,2025-03-15T19:20:00Z,EN,3D,PG,2025-03-14T12:00:00Z",
+    "Downtown Cinema 7,Dune: Part Two,Auditorium 1,2025-03-15T20:00:00Z,2025-03-15T22:46:00Z,EN,IMAX,PG-13,2025-03-14T12:00:00Z"
+  ],
+  "feedback": "This is the full schedule for March 15, so archive the late Dune showing.",
+  "expect": {
+    "counts": {
+      "archive": 1
+    },
+    "tickedArchives": 1
+  }
+}

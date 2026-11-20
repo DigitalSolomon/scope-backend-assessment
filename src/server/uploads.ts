@@ -59,6 +59,9 @@ type AnalysisDetail = {
   botMessage?: string;
   source?: "agent" | "rule";
   thoughts?: string[];
+  /** Showtime ids whose archive proposal starts ticked (asked for in reviewer feedback). */
+  preselectedArchives?: string[];
+  /** Older proposals recorded one flag for every archive. */
   archivesPreselected?: boolean;
   thinkingLevel?: string | null;
 };
@@ -98,6 +101,11 @@ export async function getUpload(userId: string, uploadId: string): Promise<ApiUp
       order by created_at desc, id desc limit 1`,
   ]);
 
+  const a = analysis[0]?.detail ?? {};
+  // Proposals saved before archives were recorded per showtime had them all ticked.
+  const ticked = (showtimeId: string | null) =>
+    Array.isArray(a.preselectedArchives) ? a.preselectedArchives.includes(showtimeId ?? "") : (a.archivesPreselected ?? true);
+
   const iso = (d: Date | null) => d?.toISOString() ?? "";
   const items: ApiChange[] = rows.map((r) => ({
     id: r.id,
@@ -115,6 +123,7 @@ export async function getUpload(userId: string, uploadId: string): Promise<ApiUp
     confidence: r.confidence === null ? null : Number(r.confidence),
     source: r.source,
     decision: r.decision,
+    preselected: r.kind === "archive" ? ticked(r.showtime_id) : true,
     diffs: r.diffs ?? [],
     applyError: r.apply_error,
     appliedAt: r.applied_at?.toISOString() ?? null,
@@ -137,15 +146,12 @@ export async function getUpload(userId: string, uploadId: string): Promise<ApiUp
     }
   }
 
-  const a = analysis[0]?.detail ?? {};
   return {
     ...upload,
     botMessage: a.botMessage ?? null,
     source: a.source ?? (upload.model ? "agent" : "rule"),
     thoughts: a.thoughts ?? [],
     thinkingLevel: a.thinkingLevel ?? null,
-    // Proposals saved before this flag existed had their archives ticked.
-    archivesPreselected: a.archivesPreselected ?? true,
     changes,
     items,
     events,

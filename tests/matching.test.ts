@@ -50,6 +50,14 @@ describe("which theater a row is for", () => {
       assert.ok(!sameTheater(name, "Downtown Cinema 7"), name);
     }
   });
+
+  it("a different number is a different theater, however close the rest of the name is", () => {
+    for (const name of ["Downtown Cinema 8", "Downtown Cinema 17", "Downtown Cinema Eight"]) {
+      assert.ok(!sameTheater(name, "Downtown Cinema 7"), name);
+    }
+    assert.ok(!sameTheater("Empire Picture House 10015", "Empire Picture House 10014"));
+    assert.ok(sameTheater("Downtown Cinema Seven", "Downtown Cinema 7"), "the same number in words");
+  });
 });
 
 describe("time display", () => {

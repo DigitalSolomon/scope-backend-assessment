@@ -68,3 +68,50 @@ export function ndjson(job: (send: (e: ReconcileEvent) => void) => Promise<ApiUp
     },
   });
 }
+
+/**
+ * The same long-running job for a client that asked for plain JSON. A proxy
+ * drops a connection that stays silent for about a minute, and an analysis
+ * can take longer, so a space is sent every few seconds until the JSON is
+ * ready (JSON may be preceded by whitespace, so the body still parses as one
+ * document). The status line is sent before the job runs, which is why the
+ * caller checks access and input first: a failure after that point arrives as
+ * `{ "error": … }` with status 200.
+ */
+export function jsonKeepAlive(job: () => Promise<unknown>): Response {
+  const encoder = new TextEncoder();
+  let closed = false;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const write = (text: string) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(text));
+        } catch {
+          closed = true; // client went away; the job still finishes and is stored
+        }
+      };
+      heartbeat = setInterval(() => write(" "), HEARTBEAT_MS);
+      try {
+        write(JSON.stringify(await job()));
+      } catch (e) {
+        console.error("[json] job failed", e);
+        write(JSON.stringify({ error: e instanceof Error ? e.message : "Something went wrong", status: e instanceof HttpError ? e.status : 500 }));
+      } finally {
+        clearInterval(heartbeat);
+        if (!closed) {
+          closed = true;
+          controller.close();
+        }
+      }
+    },
+    cancel() {
+      closed = true;
+      clearInterval(heartbeat);
+    },
+  });
+  return new Response(body, {
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-cache, no-transform", "x-accel-buffering": "no" },
+  });
+}

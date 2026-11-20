@@ -1,11 +1,11 @@
 # ScopeBot evals: gemini-3.8-flash, low thinking
 
-Run 2026-11-20 08:14 UTC · 28 cases · **28/28 passed (100%)** · median 8s, slowest 38s per case · 5 case(s) re-run individually afterwards (marked ↻)
+Run 2026-11-20 08:14 UTC · 34 cases · **34/34 passed (100%)** · median 8s, slowest 38s per case · 15 case(s) re-run individually afterwards (marked ↻)
 
 | Case | Protects | Passed | Median |
 | --- | --- | --- | --- |
-| Sample file existing.csv | Reactivation; stale rows left alone | 1/1 | 8s |
-| Sample file new-drop.csv | New record; duplicate row; messy titles and rooms matched | 1/1 | 9s |
+| Sample file existing.csv ↻ | Reactivation; stale rows left alone | 1/1 | 8s |
+| Sample file new-drop.csv ↻ | New record; duplicate row; messy titles and rooms matched | 1/1 | 8s |
 | new-drop.csv after existing.csv was applied | Missing records are suggested, not pre-selected | 1/1 | 8s |
 | Typos and odd spellings of titles and rooms | Title and auditorium matching | 1/1 | 9s |
 | One-row patch: a showing moves to another room | Changed record; a partial file archives nothing | 1/1 | 5s |
@@ -24,11 +24,17 @@ Run 2026-11-20 08:14 UTC · 28 cases · **28/28 passed (100%)** · median 8s, sl
 | A late show that ends after midnight, plus the next day | Day boundaries; unchanged records stay unchanged | 1/1 | 5s |
 | A showing moves to a room the theater has not used before | A new room is not forced onto an existing one | 1/1 | 5s |
 | A new showing that overlaps another in the same room | Double bookings are flagged for the reviewer | 1/1 | 13s |
-| Feedback: keep one showing archived | Reject with feedback is honored | 1/1 | 25s |
+| Feedback: keep one showing archived ↻ | Reject with feedback is honored | 1/1 | 21s |
 | Feedback: don't add one of the new showings | Reject with feedback is honored | 1/1 | 21s |
-| Feedback that tries to override the rules | Feedback cannot archive matched showtimes or claim work is done | 1/1 | 20s |
+| Feedback that tries to override the rules ↻ | Feedback cannot archive matched showtimes or claim work is done | 1/1 | 22s |
 | Good rows mixed with a broken one | Invalid rows are skipped with a reason; the rest proceed | 1/1 | 5s |
 | A semicolon-delimited export | Other delimiters are read end to end | 1/1 | 9s |
 | A 40-row file for two new days | Larger files finish with the model, inside the time budget | 1/1 | 38s |
 | A showing is renamed to a sequel title ↻ | A title that differs only in its number is a title change, not a new film or a typo | 1/1 | 8s |
-| Feedback: add it as a new movie instead of renaming ↻ | After feedback, an add in an occupied slot stays an add and is flagged as a double booking | 1/1 | 11s |
+| Feedback: add it as a new movie instead of renaming ↻ | After feedback, an add in an occupied slot stays an add and is flagged as a double booking | 1/1 | 13s |
+| A row for a theater whose name differs only by its number ↻ | Another theater's row is skipped by code, however similar the name | 1/1 | 5s |
+| The same showing twice, with different rooms ↻ | Conflicting duplicates: the newer row is used and the reviewer is told | 1/1 | 6s |
+| Feedback about one showing leaves a missing showtime as a suggestion ↻ | Feedback never turns an unticked archive suggestion into a selected one | 1/1 | 23s |
+| Feedback: this is the full schedule, archive what is missing ↻ | An archive the reviewer asks for is proposed and selected | 1/1 | 13s |
+| A typo of a film that is not showing that day ↻ | A film already in the catalog is matched, not added as a second film | 1/1 | 6s |
+| A 150-row file for a week ↻ | Large files: exact matches are decided in code, the model judges the rest, inside the time budget | 1/1 | 7s |

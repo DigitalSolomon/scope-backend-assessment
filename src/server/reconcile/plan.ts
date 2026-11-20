@@ -5,7 +5,7 @@ import { normalizeKey } from "~/lib/normalize";
 import type { ChangeKind, FieldDiff } from "~/types/assessment";
 import type { CsvRow, InvalidRow } from "./csv";
 import { clockTimesIn, formatClock, formatDay, formatWhen } from "~/lib/format";
-import { differsByNumber, sameFilm, sameRoom, similarity, tokens, type ReconcileContext, type StoredShowtime } from "./context";
+import { differsByNumber, knownTitle, sameFilm, sameRoom, similarCatalogTitles, similarity, tokens, type ReconcileContext, type StoredShowtime } from "./context";
 
 // ------------------------------------------------------------------ the change set
 //
@@ -190,10 +190,12 @@ export interface MaterializeOptions {
    * After reviewer feedback the model's choices are deliberate, so they are
    * honored: "unchanged" keeps a showtime as it is (even archived), "update"
    * applies even to a stale row, "add" stays a new showing even in an
-   * occupied slot, and its archive list is used and pre-selected.
+   * occupied slot, and the showtimes it lists to archive start ticked.
    * On a first pass the server decides those from facts instead.
    */
   honorDecisions?: boolean;
+  /** Rows whose decision came from code, not the model (exact matches in a large file, or a part the model could not finish). */
+  ruleRows?: Set<number>;
 }
 
 export interface Materialized {
@@ -202,8 +204,22 @@ export interface Materialized {
   issues: string[];
   /** Things the reviewer should know (double-booked rooms). */
   notices: string[];
-  /** Whether archive proposals start ticked in the review. */
-  archivesPreselected: boolean;
+  /**
+   * Showtimes (by id) whose archive proposal starts ticked in the review:
+   * only the ones a reviewer's feedback asked for. A showtime that is merely
+   * missing from the file is a suggestion and starts unticked, on every pass.
+   */
+  preselectedArchives: string[];
+}
+
+/** What two rows for one showing disagree about, in the reviewer's words. */
+function disagreements(a: CsvRow, b: CsvRow): string[] {
+  const out: string[] = [];
+  if (!sameRoom(a.auditorium, b.auditorium)) out.push(`room (${a.auditorium} vs ${b.auditorium})`);
+  if (a.endTime !== b.endTime) out.push(`end time (${formatClock(a.endTime)} vs ${formatClock(b.endTime)})`);
+  if (a.language && b.language && !sameCode(a.language, b.language)) out.push(`language (${a.language} vs ${b.language})`);
+  if (a.format && b.format && !sameCode(a.format, b.format)) out.push(`format (${a.format} vs ${b.format})`);
+  return out;
 }
 
 /**
@@ -277,7 +293,10 @@ export function materialize(
         : `Brings back the ${s.status} ${s.movieTitle} showing.`;
     } else {
       const said = explanation.toLowerCase();
-      const unmentioned = diffs.filter((x) => ["language", "format", "movieTitle"].includes(x.field) && !said.includes(x.newValue.toLowerCase()));
+      // A model's sentence names the room or time it moves; a decision made in
+      // code (an exact match in a large file) names nothing, so list every change.
+      const fields = opts.ruleRows?.has(row.row) ? ["language", "format", "movieTitle", "auditorium", "startTime", "endTime"] : ["language", "format", "movieTitle"];
+      const unmentioned = diffs.filter((x) => fields.includes(x.field) && !said.includes(x.newValue.toLowerCase()));
       if (unmentioned.length) extra.push(` (Also changes ${describeDiffs(unmentioned)}.)`);
     }
     const kind: ChangeKind = s.status !== "active" ? "reactivate" : "update";
@@ -291,9 +310,74 @@ export function materialize(
     return draft;
   };
 
-  for (const row of rows) {
+  // Rows the plan treats as one showing: a "duplicate" of another row, or two
+  // rows naming the same stored showtime. If they agree, the first speaks for
+  // the showing, as before. If they disagree, silently keeping the first can
+  // drop the newer data, so the row updated most recently speaks for it and
+  // the reviewer is told either way. (After feedback the model's choice of
+  // row is deliberate and is kept.)
+  const duplicateNote = new Map<number, string>();
+  {
+    const leader = new Map<number, number>(); // duplicate row -> row that speaks for the showing
+    const byShowtime = new Map<string, number>();
+    for (const row of rows) {
+      const d = byRow.get(row.row);
+      if (!d) continue;
+      let lead: number | undefined;
+      if (d.action === "duplicate" && d.duplicateOfRow != null) lead = leader.get(d.duplicateOfRow) ?? d.duplicateOfRow;
+      else if ((d.action === "update" || d.action === "unchanged") && d.showtimeId) {
+        lead = byShowtime.get(d.showtimeId);
+        if (lead === undefined) {
+          byShowtime.set(d.showtimeId, row.row);
+          continue;
+        }
+      }
+      const leadRow = lead === undefined ? undefined : rowByNumber.get(lead);
+      const leadDecision = lead === undefined ? undefined : byRow.get(lead);
+      if (lead === undefined || lead >= row.row || !leadRow || !leadDecision || leadDecision.action === "duplicate" || leadDecision.action === "invalid") continue;
+      leader.set(row.row, lead);
+      const differs = disagreements(leadRow, row);
+      if (!differs.length) continue;
+      const about = differs.join(" and ");
+      const newer = !honor && row.lastUpdated !== null && leadRow.lastUpdated !== null && Date.parse(row.lastUpdated) > Date.parse(leadRow.lastUpdated);
+      if (!newer) {
+        notices.push(`Rows ${lead} and ${row.row} are the same showing but disagree on ${about}. Row ${lead} is used; check which is right.`);
+        duplicateNote.set(row.row, `Same showing as row ${lead}, but it disagrees on ${about}. Row ${lead} is used.`);
+        continue;
+      }
+      // The later row is newer: it takes over the decision, with its own room.
+      const room = ctx.auditoriums.find((a) => sameRoom(a.name, row.auditorium))?.name ?? null;
+      byRow.set(row.row, {
+        ...leadDecision, row: row.row, auditorium: room, confidence: Math.min(leadDecision.confidence, 0.85),
+        explanation: `Rows ${lead} and ${row.row} are the same showing; row ${row.row} was updated more recently, so its values are used.`,
+      });
+      byRow.set(lead, {
+        row: lead, action: "duplicate", duplicateOfRow: row.row, showtimeId: null, title: null, auditorium: null, confidence: 0.9,
+        explanation: `Same showing as row ${row.row}, which was updated more recently.`,
+      });
+      for (const [follower, of] of leader) {
+        if (of !== lead) continue;
+        leader.set(follower, row.row);
+        const fd = byRow.get(follower);
+        if (fd && follower !== row.row) byRow.set(follower, { ...fd, action: "duplicate", duplicateOfRow: row.row, showtimeId: null });
+      }
+      leader.delete(row.row);
+      leader.set(lead, row.row);
+      if (leadDecision.showtimeId) byShowtime.set(leadDecision.showtimeId, row.row);
+      duplicateNote.set(lead, `Same showing as row ${row.row}, which was updated more recently and disagrees on ${about}. Row ${row.row} is used.`);
+      notices.push(`Rows ${lead} and ${row.row} are the same showing but disagree on ${about}. Row ${row.row} was updated more recently, so it is used.`);
+    }
+  }
+  // A duplicate that points at a later row waits until that row is resolved.
+  const waits = (r: CsvRow) => {
+    const d = byRow.get(r.row);
+    return d?.action === "duplicate" && d.duplicateOfRow != null && d.duplicateOfRow > r.row ? 1 : 0;
+  };
+  const ordered = [...rows].sort((a, b) => waits(a) - waits(b));
+
+  for (const row of ordered) {
     let decision = byRow.get(row.row);
-    let src: "agent" | "rule" = source;
+    let src: "agent" | "rule" = opts.ruleRows?.has(row.row) ? "rule" : source;
     const replaceWithRule = (why: string) => {
       issues.push(`Row ${row.row}: ${why}; used the rule-based decision instead.`);
       decision = fallbackByRow.get(row.row);
@@ -327,7 +411,7 @@ export function materialize(
       row: row.row, action: "add", showtimeId: null, duplicateOfRow: null, title: null,
       auditorium: null, explanation: "No decision available; treated as new.", confidence: 0.5,
     };
-    const d = decision;
+    let d = decision;
 
     const base: Values = {
       movieTitle: (d.title ?? "").trim() || row.movieTitle,
@@ -341,16 +425,29 @@ export function materialize(
     const common: Common = { csvRows: [row.row], explanation: d.explanation, confidence: d.confidence, source: src };
 
     if (d.action === "duplicate") {
-      const of = resolvedRow.get(d.duplicateOfRow!)!;
-      of.csvRows.push(row.row);
-      drafts.push({ ...common, ...base, kind: "duplicate", showtimeId: of.showtimeId, showtimeVersion: null, diffs: [] });
-      continue;
+      const of = d.duplicateOfRow != null ? resolvedRow.get(d.duplicateOfRow) : undefined;
+      if (of) {
+        of.csvRows.push(row.row);
+        resolvedRow.set(row.row, of); // so a third copy can point at this one
+        drafts.push({
+          ...common, ...base, kind: "duplicate", showtimeId: of.showtimeId, showtimeVersion: null, diffs: [],
+          explanation: duplicateNote.get(row.row) ?? common.explanation,
+        });
+        continue;
+      }
+      // The row it repeats was itself skipped, so this row stands on its own.
+      d = { ...d, action: "add", duplicateOfRow: null };
+      common.explanation = "No stored showtime of this film at this time.";
     }
     if (d.action === "invalid") {
       drafts.push({ ...common, ...base, kind: "invalid", showtimeId: null, showtimeVersion: null, diffs: [] });
       continue;
     }
     if (d.action === "add") {
+      // A film already known under the same words (on this schedule or in the
+      // catalog) keeps its stored title, so it is never added a second time.
+      const known = knownTitle(ctx, base.movieTitle) ?? knownTitle(ctx, row.movieTitle);
+      if (known) base.movieTitle = known;
       // Guard: an "add" that collides with an existing active showtime of the
       // same film at the same start would violate the one-active rule.
       const clash = ctx.stored.find(
@@ -366,6 +463,14 @@ export function materialize(
         continue;
       }
       const draft: ChangeDraft = { ...common, ...base, kind: "add", showtimeId: null, showtimeVersion: null, diffs: [] };
+      // A new film whose title is a typo away from a catalog film (the same
+      // bar as sameFilm; "Glass Harbor" is not "Last Harbor") is probably that
+      // film. Only the model or the reviewer can say, so flag it.
+      const near = known ? undefined : similarCatalogTitles(ctx, draft.movieTitle, 1)[0];
+      if (near && sameFilm(near, draft.movieTitle)) {
+        notes.set(draft, [` (Heads up: the catalog already has "${near}". If this is that film, reject with feedback so it is not added as a second one.)`]);
+        notices.push(`"${draft.movieTitle}" would be added as a new film, but the catalog already has "${near}".`);
+      }
       drafts.push(draft);
       resolvedRow.set(row.row, draft);
       continue;
@@ -379,7 +484,7 @@ export function materialize(
     if (!honor && sameText(base.movieTitle, s.movieTitle) && differsByNumber(row.movieTitle, s.movieTitle)) {
       base.movieTitle = row.movieTitle;
     }
-    const draft = matched(s, row, base, common, d.action);
+    const draft = matched(s, row, base, common, d.action === "unchanged" ? "unchanged" : "update");
     drafts.push(draft);
     resolvedRow.set(row.row, draft);
   }
@@ -451,9 +556,14 @@ export function materialize(
   for (const a of plan.archive) {
     if (!ctx.storedById.has(a.showtimeId)) issues.push(`Ignored archive of "${a.showtimeId}": not a stored showtime.`);
   }
-  const toArchive = honor
-    ? [...candidates.values()].filter((s) => modelArchive.has(s.id))
-    : [...candidates.values()].filter((s) => coveredDays.has(s.startTime.slice(0, 10)));
+  // Missing on a day the file covers: a suggestion, unticked. After feedback
+  // the model also lists what the reviewer asked to archive: those are ticked.
+  // Feedback about something else must never turn a suggestion into a
+  // selected archive, so the two are kept apart.
+  const suggested = [...candidates.values()].filter((s) => coveredDays.has(s.startTime.slice(0, 10)));
+  const requested = honor ? [...candidates.values()].filter((s) => modelArchive.has(s.id)) : [];
+  const preselectedArchives = requested.map((s) => s.id);
+  const toArchive = [...new Map([...requested, ...suggested].map((s) => [s.id, s])).values()];
   for (const s of toArchive) {
     const a = modelArchive.get(s.id);
     drafts.push({
@@ -507,7 +617,8 @@ export function materialize(
   }
 
   for (const draft of drafts) draft.explanation += (notes.get(draft) ?? []).join("");
-  return { drafts, issues, notices, archivesPreselected: honor };
+  // One line per distinct notice, however many rows raise it.
+  return { drafts, issues, notices: [...new Set(notices)], preselectedArchives };
 }
 
 /** A sentence written from the data, used when the model's own sentence fails a check. */

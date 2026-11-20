@@ -36,6 +36,12 @@ export interface ReconcileContext {
   storedById: Map<string, StoredShowtime>;
   auditoriums: { id: string; name: string }[];
   candidates: Map<number, Candidate[]>; // by CSV row
+  /**
+   * Titles of films already in the catalog (any theater) that resemble a
+   * title in the file. The stored schedule only covers the file's days, so
+   * without this a film that is not showing on those days looks brand new.
+   */
+  catalog: string[];
 }
 
 // ------------------------------------------------------------ similarity
@@ -110,6 +116,10 @@ export function sameRoom(a: string, b: string): boolean {
  */
 export function sameTheater(fileName: string, theaterName: string): boolean {
   if (!fileName.trim()) return true;
+  // A different number is a different theater ("Downtown Cinema 8"), however
+  // close the rest of the name is. Leaving the number out is still fine.
+  const fileNumbers = numbersIn(fileName);
+  if (fileNumbers && fileNumbers !== numbersIn(theaterName)) return false;
   if (similarity(fileName, theaterName) >= 0.6) return true;
   const a = new Set(tokens(fileName));
   const b = new Set(tokens(theaterName));
@@ -129,6 +139,31 @@ export const differsByNumber = (a: string, b: string) => numbersIn(a) !== number
 /** Same film, allowing spelling noise ("Spider Man - Homecoming") but not a different number. */
 export const sameFilm = (a: string, b: string) =>
   normalizeKey(a) === normalizeKey(b) || (!differsByNumber(a, b) && similarity(a, b) >= 0.9);
+
+/** The same title written another way: case, punctuation, "2" / "Two" / "II". No guessing at typos. */
+export const sameTitleWords = (a: string, b: string) => tokens(a).join(" ") === tokens(b).join(" ");
+
+/**
+ * The film a title certainly is, among those already known: first the films
+ * on this theater's stored schedule, then the rest of the catalog. Certain
+ * means the same words (sameTitleWords); a near miss is the model's call.
+ */
+export function knownTitle(ctx: ReconcileContext, title: string): string | undefined {
+  return (
+    ctx.stored.find((s) => sameTitleWords(s.movieTitle, title))?.movieTitle ??
+    ctx.catalog.find((t) => sameTitleWords(t, title))
+  );
+}
+
+/** Catalog films a title resembles, closest first, for the model to judge. */
+export function similarCatalogTitles(ctx: ReconcileContext, title: string, limit = 3): string[] {
+  return ctx.catalog
+    .map((t) => ({ t, score: similarity(t, title) }))
+    .filter((x) => x.score >= 0.6)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((x) => x.t);
+}
 
 // ------------------------------------------------------------ loading
 
@@ -193,7 +228,35 @@ export async function loadContext(theaterId: string, rows: CsvRow[]): Promise<Re
   const auditoriums = await sql<{ id: string; name: string }[]>`
     select id, name from hv_theater.auditoriums where theater_id = ${theaterId} order by name`;
 
-  return buildContext(theater, stored, auditoriums, rows);
+  return buildContext(theater, stored, auditoriums, rows, await loadCatalog(rows));
+}
+
+/** How many catalog titles to consider at most; they are ranked in code afterwards. */
+const CATALOG_LIMIT = 500;
+
+/**
+ * Catalog films whose title could be one of the file's: the same identity
+ * key, or sharing one of a title's two longest words. Both lookups are
+ * indexed (unique key; trigram index for ILIKE), so the cost follows the
+ * number of distinct titles in the file, not the size of the catalog.
+ */
+async function loadCatalog(rows: CsvRow[]): Promise<string[]> {
+  const titles = [...new Set(rows.map((r) => r.movieTitle))];
+  if (!titles.length) return [];
+  const keys = [...new Set(titles.map(normalizeKey))];
+  const words = new Set<string>();
+  for (const key of keys) {
+    const longest = key.split(" ").filter((w) => w.length >= 4 && !/^\d+$/.test(w)).sort((a, b) => b.length - a.length);
+    for (const w of longest.slice(0, 2)) words.add(w);
+  }
+  const patterns = [...words].slice(0, 200).map((w) => `%${w}%`);
+  const found = await sql<{ title: string }[]>`
+    select title from hv_theater.movies
+    where title_key = any(${keys}::text[]) or title ilike any(${patterns}::text[])
+    order by (title_key = any(${keys}::text[])) desc, length(title)
+    limit ${CATALOG_LIMIT}`;
+  // Keep only titles that actually resemble one in the file.
+  return found.map((m) => m.title).filter((t) => titles.some((csv) => similarity(t, csv) >= 0.6));
 }
 
 /**
@@ -206,6 +269,7 @@ export function buildContext(
   stored: StoredShowtime[],
   auditoriums: { id: string; name: string }[],
   rows: CsvRow[],
+  catalog: string[] = [],
 ): ReconcileContext {
   const window = rows.length ? windowFor(rows) : { from: "", to: "", days: [] as string[] };
   // Same 3h margin the loader's query uses, so fixture schedules behave like the database.
@@ -242,5 +306,6 @@ export function buildContext(
     storedById: new Map(stored.map((s) => [s.id, s])),
     auditoriums,
     candidates,
+    catalog,
   };
 }
