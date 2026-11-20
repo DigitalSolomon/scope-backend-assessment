@@ -1,0 +1,29 @@
+{
+  "title": "Sample file existing.csv",
+  "checks": "Reactivation; stale rows left alone",
+  "csvFile": "sample-data/existing.csv",
+  "expect": {
+    "counts": {
+      "reactivate": 2,
+      "add": 0,
+      "update": 0,
+      "archive": 0,
+      "duplicate": 0
+    },
+    "changes": [
+      {
+        "kind": "reactivate",
+        "title": "Wonka"
+      },
+      {
+        "kind": "reactivate",
+        "title": "Oppenheimer"
+      },
+      {
+        "kind": "unchanged",
+        "title": "Dune: Part Two",
+        "explains": "older|stale|kept stored"
+      }
+    ]
+  }
+}

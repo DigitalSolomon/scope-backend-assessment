@@ -1,0 +1,23 @@
+{
+  "title": "A showing changes format (3D to 2D)",
+  "checks": "Changed record with a field-level diff",
+  "rows": [
+    "Downtown Cinema 7,Inside Out 2,Auditorium 2,2025-03-15T17:30:00Z,2025-03-15T19:20:00Z,EN,2D,PG,2025-03-14T12:00:00Z"
+  ],
+  "expect": {
+    "counts": {
+      "update": 1,
+      "add": 0,
+      "archive": 0
+    },
+    "changes": [
+      {
+        "kind": "update",
+        "title": "Inside Out 2",
+        "sets": {
+          "format": "2D"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "title": "Good rows mixed with a broken one",
+  "checks": "Invalid rows are skipped with a reason; the rest proceed",
+  "rows": [
+    "Downtown Cinema 7,Dune: Part Two,Auditorium 1,2025-03-15T20:00:00Z,2025-03-15T22:46:00Z,EN,IMAX,PG-13,2025-03-14T12:00:00Z",
+    "Downtown Cinema 7,Wonka,Auditorium 3,not a date,2025-03-15T17:56:00Z,EN,2D,PG,2025-03-14T12:00:00Z",
+    "Downtown Cinema 7,Kung Fu Panda 4,Auditorium 5,2025-03-15T18:30:00Z,2025-03-15T20:10:00Z,EN,2D,PG,2025-03-14T12:00:00Z"
+  ],
+  "expect": {
+    "counts": {
+      "add": 1,
+      "invalid": 1,
+      "update": 0
+    },
+    "warnings": [
+      "1 row skipped"
+    ]
+  }
+}

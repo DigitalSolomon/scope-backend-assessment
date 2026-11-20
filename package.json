@@ -5,20 +5,21 @@
   "type": "module",
   "scripts": {
     "build": "next build",
-    "check": "next lint && tsc --noEmit",
+    "check": "next lint && tsc --noEmit && npm test",
     "db:migrate": "node --experimental-strip-types --no-warnings --env-file=.env scripts/db.mjs migrate",
+    "db:reset": "node --experimental-strip-types --no-warnings --env-file=.env scripts/db.mjs reset",
     "db:seed": "node --experimental-strip-types --no-warnings --env-file=.env scripts/db.mjs seed",
     "db:seed:scale": "node --experimental-strip-types --no-warnings --env-file=.env scripts/db.mjs seed-scale",
-    "db:reset": "node --experimental-strip-types --no-warnings --env-file=.env scripts/db.mjs reset",
     "dev": "next dev --turbo",
+    "evals": "tsx --conditions=react-server --env-file=.env evals/run.ts",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,mdx}\" --cache",
     "format:write": "prettier --write \"**/*.{ts,tsx,js,jsx,mdx}\" --cache",
     "lint": "next lint",
     "lint:fix": "next lint --fix",
     "preview": "next build && next start",
     "start": "next start",
-    "test": "jest",
-    "test:watch": "jest --watch",
+    "test": "tsx --conditions=react-server --import ./tests/setup.ts --test --test-reporter=spec tests/*.test.ts",
+    "test:api": "node --test --test-reporter=spec tests/api/smoke.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -43,6 +44,7 @@
     "prettier": "^3.5.3",
     "prettier-plugin-tailwindcss": "^0.6.11",
     "tailwindcss": "^4.0.15",
+    "tsx": "^4.23.15",
     "typescript": "^5.8.2",
     "typescript-eslint": "^8.27.0"
   },

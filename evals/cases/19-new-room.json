@@ -1,0 +1,22 @@
+{
+  "title": "A showing moves to a room the theater has not used before",
+  "checks": "A new room is not forced onto an existing one",
+  "rows": [
+    "Downtown Cinema 7,Spider-Man: Homecoming,Auditorium 9,2025-03-15T18:00:00Z,2025-03-15T20:13:00Z,EN,2D,PG-13,2025-03-14T12:00:00Z"
+  ],
+  "expect": {
+    "counts": {
+      "update": 1,
+      "add": 0
+    },
+    "changes": [
+      {
+        "kind": "update",
+        "title": "Spider-Man: Homecoming",
+        "sets": {
+          "auditorium": "Auditorium 9"
+        }
+      }
+    ]
+  }
+}

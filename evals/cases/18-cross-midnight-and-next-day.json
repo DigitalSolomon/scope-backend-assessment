@@ -1,0 +1,16 @@
+{
+  "title": "A late show that ends after midnight, plus the next day",
+  "checks": "Day boundaries; unchanged records stay unchanged",
+  "rows": [
+    "Downtown Cinema 7,Dune: Part Two,Auditorium 1,2025-03-15T22:45:00Z,2025-03-16T01:31:00Z,EN,2D,PG-13,2025-03-14T12:00:00Z",
+    "Downtown Cinema 7,Kung Fu Panda 4,Auditorium 3,2025-03-16T17:30:00Z,2025-03-16T19:05:00Z,EN,2D,PG,2025-03-14T12:00:00Z"
+  ],
+  "expect": {
+    "counts": {
+      "add": 0,
+      "update": 0,
+      "archive": 0,
+      "unchanged": 2
+    }
+  }
+}

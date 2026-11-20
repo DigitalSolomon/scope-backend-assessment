@@ -1,0 +1,32 @@
+{
+  "title": "new-drop.csv after existing.csv was applied",
+  "checks": "Missing records are suggested, not pre-selected",
+  "csvFile": "sample-data/new-drop.csv",
+  "schedule": {
+    "st-dt-005": {
+      "status": "active"
+    },
+    "st-dt-006": {
+      "status": "active"
+    }
+  },
+  "expect": {
+    "counts": {
+      "add": 1,
+      "duplicate": 1,
+      "archive": 2,
+      "update": 0
+    },
+    "changes": [
+      {
+        "kind": "archive",
+        "title": "Wonka"
+      },
+      {
+        "kind": "archive",
+        "title": "Oppenheimer"
+      }
+    ],
+    "message": "2 active showings that aren't in the file"
+  }
+}

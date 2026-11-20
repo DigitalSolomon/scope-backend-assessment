@@ -1,0 +1,26 @@
+{
+  "title": "A showing starts 30 minutes later",
+  "checks": "A reschedule is one update, not add + archive",
+  "rows": [
+    "Downtown Cinema 7,Inside Out 2,Auditorium 2,2025-03-15T17:30:00Z,2025-03-15T19:20:00Z,EN,3D,PG,2025-03-14T12:00:00Z",
+    "Downtown Cinema 7,Spider-Man: Homecoming,Auditorium 1,2025-03-15T18:30:00Z,2025-03-15T20:43:00Z,EN,2D,PG-13,2025-03-14T12:00:00Z",
+    "Downtown Cinema 7,Dune: Part Two,Auditorium 1,2025-03-15T20:00:00Z,2025-03-15T22:46:00Z,EN,IMAX,PG-13,2025-03-14T12:00:00Z",
+    "Downtown Cinema 7,Dune: Part Two,Auditorium 1,2025-03-15T22:45:00Z,2025-03-16T01:31:00Z,EN,2D,PG-13,2025-03-14T12:00:00Z"
+  ],
+  "expect": {
+    "counts": {
+      "update": 1,
+      "add": 0,
+      "archive": 0
+    },
+    "changes": [
+      {
+        "kind": "update",
+        "title": "Spider-Man: Homecoming",
+        "sets": {
+          "startTime": "2025-03-15T18:30:00.000Z"
+        }
+      }
+    ]
+  }
+}

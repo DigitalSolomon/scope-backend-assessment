@@ -1,0 +1,16 @@
+{
+  "title": "A file with only the five required columns",
+  "checks": "Blank optional columns never wipe stored values",
+  "csv": [
+    "theater_name,movie_title,auditorium,start_time,end_time",
+    "Downtown Cinema 7,Spider-Man: Homecoming,Auditorium 1,2025-03-15T18:00:00Z,2025-03-15T20:13:00Z",
+    "Downtown Cinema 7,Dune: Part Two,Auditorium 1,2025-03-15T20:00:00Z,2025-03-15T22:46:00Z",
+    "Downtown Cinema 7,Inside Out 2,Auditorium 2,2025-03-15T17:30:00Z,2025-03-15T19:20:00Z"
+  ],
+  "expect": {
+    "counts": {
+      "update": 0,
+      "add": 0
+    }
+  }
+}

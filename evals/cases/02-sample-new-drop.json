@@ -1,0 +1,21 @@
+{
+  "title": "Sample file new-drop.csv",
+  "checks": "New record; duplicate row; messy titles and rooms matched",
+  "csvFile": "sample-data/new-drop.csv",
+  "expect": {
+    "counts": {
+      "add": 1,
+      "duplicate": 1,
+      "update": 0,
+      "reactivate": 0,
+      "archive": 0
+    },
+    "changes": [
+      {
+        "kind": "add",
+        "title": "Kung Fu Panda 4",
+        "room": "Auditorium 5"
+      }
+    ]
+  }
+}

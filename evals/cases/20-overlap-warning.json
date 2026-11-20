@@ -1,0 +1,16 @@
+{
+  "title": "A new showing that overlaps another in the same room",
+  "checks": "Double bookings are flagged for the reviewer",
+  "rows": [
+    "Downtown Cinema 7,Barbie,Aud 1,2025-03-15T18:30:00Z,2025-03-15T20:24:00Z,EN,2D,PG-13,2025-03-14T12:00:00Z"
+  ],
+  "expect": {
+    "counts": {
+      "add": 1,
+      "update": 0
+    },
+    "warnings": [
+      "overlaps Spider-Man"
+    ]
+  }
+}

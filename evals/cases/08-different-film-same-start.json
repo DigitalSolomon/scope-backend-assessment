@@ -1,0 +1,20 @@
+{
+  "title": "A different film at the same start time as an existing one",
+  "checks": "Same start time alone is not a match",
+  "rows": [
+    "Downtown Cinema 7,Barbie,Auditorium 5,2025-03-15T18:00:00Z,2025-03-15T19:54:00Z,EN,2D,PG-13,2025-03-14T12:00:00Z"
+  ],
+  "expect": {
+    "counts": {
+      "add": 1,
+      "update": 0,
+      "archive": 0
+    },
+    "absent": [
+      {
+        "kind": "update",
+        "title": "Spider-Man: Homecoming"
+      }
+    ]
+  }
+}

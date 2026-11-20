@@ -1,0 +1,21 @@
+{
+  "title": "A whole file meant for another theater",
+  "checks": "A wrong-theater upload proposes nothing, without needing the model",
+  "rows": [
+    "Riverside Multiplex,The Fall Guy,Auditorium A,2025-03-15T19:15:00Z,2025-03-15T21:21:00Z,EN,2D,PG-13,2025-03-14T12:00:00Z",
+    "Riverside Multiplex,Ghostbusters: Frozen Empire,Auditorium B,2025-03-15T18:00:00Z,2025-03-15T20:05:00Z,EN,3D,PG-13,2025-03-14T12:00:00Z"
+  ],
+  "expect": {
+    "counts": {
+      "add": 0,
+      "update": 0,
+      "reactivate": 0,
+      "invalid": 2
+    },
+    "warnings": [
+      "Riverside Multiplex"
+    ],
+    "message": "Riverside Multiplex",
+    "source": "rule"
+  }
+}

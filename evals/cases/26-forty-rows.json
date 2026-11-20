@@ -1,0 +1,12 @@
+{
+  "title": "A 40-row file for two new days",
+  "checks": "Larger files finish with the model, inside the time budget",
+  "csvFile": "evals/files/forty-rows.csv",
+  "expect": {
+    "counts": {
+      "add": 40,
+      "update": 0,
+      "archive": 0
+    }
+  }
+}

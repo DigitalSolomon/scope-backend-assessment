@@ -1,0 +1,23 @@
+{
+  "title": "One-row patch: a showing moves to another room",
+  "checks": "Changed record; a partial file archives nothing",
+  "rows": [
+    "Downtown Cinema 7,Dune: Part Two,Auditorium 2,2025-03-15T20:00:00Z,2025-03-15T22:46:00Z,EN,IMAX,PG-13,2025-03-14T12:00:00Z"
+  ],
+  "expect": {
+    "counts": {
+      "update": 1,
+      "add": 0,
+      "archive": 0
+    },
+    "changes": [
+      {
+        "kind": "update",
+        "title": "Dune: Part Two",
+        "sets": {
+          "auditorium": "Auditorium 2"
+        }
+      }
+    ]
+  }
+}

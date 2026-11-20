@@ -1,0 +1,23 @@
+{
+  "title": "A semicolon-delimited export",
+  "checks": "Other delimiters are read end to end",
+  "csv": [
+    "theater_name;movie_title;auditorium;start_time;end_time;language;format;rating;last_updated",
+    "Downtown Cinema 7;Dune: Part Two;Auditorium 2;2025-03-15T20:00:00Z;2025-03-15T22:46:00Z;EN;IMAX;PG-13;2025-03-14T12:00:00Z"
+  ],
+  "expect": {
+    "counts": {
+      "update": 1,
+      "add": 0
+    },
+    "changes": [
+      {
+        "kind": "update",
+        "title": "Dune: Part Two",
+        "sets": {
+          "auditorium": "Auditorium 2"
+        }
+      }
+    ]
+  }
+}

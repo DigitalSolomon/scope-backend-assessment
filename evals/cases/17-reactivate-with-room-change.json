@@ -1,0 +1,23 @@
+{
+  "title": "An archived showing returns in a different room",
+  "checks": "Reactivation combined with a change",
+  "rows": [
+    "Downtown Cinema 7,Wonka,Auditorium 5,2025-03-15T16:00:00Z,2025-03-15T17:56:00Z,EN,2D,PG,2025-03-14T12:00:00Z"
+  ],
+  "expect": {
+    "counts": {
+      "reactivate": 1,
+      "add": 0
+    },
+    "changes": [
+      {
+        "kind": "reactivate",
+        "title": "Wonka",
+        "sets": {
+          "auditorium": "Auditorium 5",
+          "status": "active"
+        }
+      }
+    ]
+  }
+}

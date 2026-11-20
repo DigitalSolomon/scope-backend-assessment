@@ -1,0 +1,24 @@
+{
+  "title": "Typos and odd spellings of titles and rooms",
+  "checks": "Title and auditorium matching",
+  "rows": [
+    "Downtown Cinema 7,Spiderman - Home coming,Aud. 1,2025-03-15T18:00:00Z,2025-03-15T20:13:00Z,EN,2D,PG-13,2025-03-14T12:00:00Z",
+    "Downtown Cinema 7,Dune 2,Auditorium 1 - IMAX,2025-03-15T20:00:00Z,2025-03-15T22:46:00Z,EN,IMAX,PG-13,2025-03-14T12:00:00Z",
+    "Downtown Cinema 7,Inside Out Two,auditorium two,2025-03-15T17:30:00Z,2025-03-15T19:20:00Z,EN,3D,PG,2025-03-14T12:00:00Z",
+    "Downtown Cinema 7,Opennheimer,Auditorium Four,2025-03-15T21:00:00Z,2025-03-16T00:00:00Z,EN,IMAX,R,2025-03-14T12:00:00Z"
+  ],
+  "expect": {
+    "counts": {
+      "add": 0,
+      "update": 0,
+      "reactivate": 1,
+      "duplicate": 0
+    },
+    "changes": [
+      {
+        "kind": "reactivate",
+        "title": "Oppenheimer"
+      }
+    ]
+  }
+}

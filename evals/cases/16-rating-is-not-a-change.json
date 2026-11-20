@@ -1,0 +1,20 @@
+{
+  "title": "The file lists a different rating for a film",
+  "checks": "Ratings are shared across theaters; an upload does not change them",
+  "rows": [
+    "Downtown Cinema 7,Dune: Part Two,Auditorium 1,2025-03-15T20:00:00Z,2025-03-15T22:46:00Z,EN,IMAX,R,2025-03-14T12:00:00Z"
+  ],
+  "expect": {
+    "counts": {
+      "update": 0,
+      "add": 0
+    },
+    "changes": [
+      {
+        "kind": "unchanged",
+        "title": "Dune: Part Two",
+        "explains": "file lists rating R"
+      }
+    ]
+  }
+}
